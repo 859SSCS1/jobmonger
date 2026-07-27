@@ -3,9 +3,9 @@ A zealous advocate for the individual employee — the way a sports agent works 
 
 ---
 
-> **Early build.** The disclaimer and guardrail wording is still placeholder text
-> (see [DECISIONS.md](DECISIONS.md) item B1). Everything else described below
-> works. Treat this as something to read and test, not yet as something to rely on.
+> **Early build.** The critical path works end to end and the legal text is
+> final. The role map, tenure reasoning, and compliance companion are not built
+> yet. Treat this as something to read and test rather than something to rely on.
 
 ## What it does
 
@@ -59,6 +59,7 @@ If you would rather read than run, two files carry the whole claim:
 |---|---|
 | [`jobmonger/redaction.py`](jobmonger/redaction.py) | Detection, the human review step, and `seal()` — the one place content is cleared to leave |
 | [`jobmonger/bridge.py`](jobmonger/bridge.py) | The only code here that opens a socket. It accepts nothing but a sealed object |
+| [`jobmonger/constants.py`](jobmonger/constants.py) | The disclaimers you are shown, and the guardrails the model is given on every request |
 
 ## How the pieces fit
 

@@ -430,12 +430,17 @@ def check_reachable(cfg: Config | None = None) -> str:
     if not endpoint:
         raise BridgeError("No model endpoint is configured.")
 
+    # The guardrails ride on this too. It carries no user content, so they are
+    # not protecting anything here — but "every request" is easier to verify,
+    # and to keep true, than "every request except the one we decided was fine".
     probe = "Reply with the single word: ready"
+    system = _guarded_system()
     if cfg.provider == "anthropic":
         headers = _anthropic_headers(key)
         body = {
             "model": cfg.model,
             "max_tokens": 2048,
+            "system": system,
             "messages": [{"role": "user", "content": probe}],
             "output_config": {"effort": "low"},
         }
@@ -444,7 +449,10 @@ def check_reachable(cfg: Config | None = None) -> str:
         body = {
             "model": cfg.model,
             "max_tokens": 16,
-            "messages": [{"role": "user", "content": probe}],
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": probe},
+            ],
         }
 
     with _post(endpoint, headers, body, stream=False) as response:

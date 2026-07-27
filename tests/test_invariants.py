@@ -140,18 +140,22 @@ def test_consent_records_whether_the_disclaimer_was_a_placeholder(granted):
 # -- disclaimers ------------------------------------------------------------
 
 
-def test_placeholders_are_marked():
-    """The tripwire that stops unfinished legal text shipping quietly.
+def test_nothing_is_a_placeholder_any_more():
+    """All three constants carry their final owner-supplied wording.
 
-    Both user-facing disclaimers now carry their final verbatim wording. Only
-    GUARDRAILS — the model-facing boundary text — is still outstanding. When its
-    wording arrives, clear the marker and change this to expect an empty list.
-    See DECISIONS.md item B1.
+    This was the tripwire that stopped unfinished legal text shipping quietly.
+    It now guards the other direction: if anything here reverts to placeholder
+    text, or new provisional text is added, this fails.
     """
-    assert constants.all_placeholders() == ["GUARDRAILS"], (
-        "Placeholder state changed. If GUARDRAILS wording is now in place, clear "
-        "the PLACEHOLDER_MARK and update this test and DECISIONS.md item B1."
+    assert constants.all_placeholders() == [], (
+        "A constant has reverted to placeholder text, or new provisional text "
+        "was added without settling it. See DECISIONS.md item B1."
     )
+
+
+def test_the_startup_notice_no_longer_fires():
+    """The user-visible consequence of the line above."""
+    assert not constants.all_placeholders()
 
 
 # The two disclaimers are owner-supplied legal text, reproduced character for
@@ -165,6 +169,9 @@ def test_placeholders_are_marked():
 # in the same commit.
 SHORT_DISCLAIMER_SHA256 = "18bc4f7e2859c7508554047783152e3bddaeff866f093f50b4c9b6a27d8b4ce4"
 LONG_DISCLAIMER_SHA256 = "9737c6f9c134510e88d1a66d827dfa99c85f96826288a6603f3befe1fbf411c1"
+# The guardrails checksum covers the original line breaks as well as the words,
+# so re-wrapping the paragraphs fails this even though no word changed.
+GUARDRAILS_SHA256 = "316f8277233ed9f224f94b2684ef0e7e5b1396731109775fb188b74a7f7c3ad4"
 
 
 def _sha(text: str) -> str:
@@ -179,6 +186,44 @@ def test_the_short_disclaimer_is_verbatim():
 
 def test_the_long_disclaimer_is_verbatim():
     assert _sha(constants.LONG_DISCLAIMER) == LONG_DISCLAIMER_SHA256
+
+
+def test_the_guardrails_are_verbatim():
+    assert _sha(constants.GUARDRAILS) == GUARDRAILS_SHA256
+
+
+def test_the_guardrails_keep_their_original_line_breaks():
+    """Explicit, because a formatter would re-wrap these without a second thought."""
+    text = constants.GUARDRAILS
+    assert text.startswith("GUARDRAILS\n\n")
+    assert text.endswith("help with what you legitimately can.")
+    assert text == text.strip(), "no leading or trailing whitespace"
+
+    paragraphs = text.split("\n\n")
+    assert len(paragraphs) == 8, f"expected 8 paragraphs, found {len(paragraphs)}"
+    assert len(text.splitlines()) == 44, "the original hard wrapping was changed"
+
+    # The PTO quotation spans a line break in the original. If someone re-wraps
+    # the text, this exact span is the first thing that moves.
+    assert '"Here\nis what your handbook says about PTO' in text
+
+
+def test_the_guardrails_keep_their_punctuation_and_role_tokens():
+    text = constants.GUARDRAILS
+
+    assert text.count("—") == 8, "an em dash was lost or converted"
+    for token in ("[MANAGER]", "[HR_REP]", "[COWORKER_1]"):
+        assert token in text, f"role token {token} was altered"
+
+    assert '"Here is the claim you can win" is not.' in text
+    assert "the user's OWN information" in text
+    assert "keep to the role's obligations" in text
+
+    for curly in ("“", "”", "‘", "’"):
+        assert curly not in text, f"a straight quote or apostrophe became {curly!r}"
+
+    non_ascii = {ch for ch in text if ord(ch) > 127}
+    assert non_ascii == {"—"}, f"unexpected non-ASCII characters: {sorted(non_ascii)}"
 
 
 def test_the_specific_characters_the_owner_flagged_survived():
@@ -231,11 +276,68 @@ def test_the_disclaimers_are_single_sourced():
 
 
 def test_the_guardrails_state_every_boundary_from_the_scope():
-    text = constants.GUARDRAILS.lower()
-    assert "legal verdict" in text
-    assert "hiring" in text or "placement" in text
-    assert "profile of any named individual" in text
-    assert "fabricate" in text
+    """Each of the scope doc's five legal guardrails is actually stated.
+
+    Whitespace is normalised first: the guardrails keep their original hard
+    wrapping, so several of these phrases span a line break in the source.
+    """
+    text = " ".join(constants.GUARDRAILS.split())
+
+    assert "Understand and organize the user's OWN information" in text
+    assert "Do not render a verdict on their legal position" in text
+    assert "Never place, broker, recommend, or match" in text and "into a job" in text
+    assert "Analyze roles, never people" in text
+    assert "Do not speculate about the real person behind a token" in text
+    assert "Never invent, alter, embellish, or manufacture records" in text
+
+
+def test_the_guardrails_cover_the_dial_invariant_too():
+    """The dial's honesty is stated to the model, not only enforced in code."""
+    text = " ".join(constants.GUARDRAILS.split())
+    assert "Change framing, never facts" in text
+    assert "even at maximum advocacy never tell the user their position is stronger" in text
+
+
+def test_the_guardrails_tell_the_model_what_to_do_when_asked_to_cross_a_line():
+    text = " ".join(constants.GUARDRAILS.split())
+    assert "decline plainly, say why, and then help with what you legitimately can" in text
+
+
+# -- the guardrails reach every request -------------------------------------
+
+
+def test_every_request_path_carries_the_guardrails():
+    """Not "every path except the one we decided was harmless"."""
+    from jobmonger import bridge
+
+    assert bridge._guarded_system().startswith("GUARDRAILS")
+    assert bridge._guarded_system("extra context").startswith("GUARDRAILS")
+    assert "extra context" in bridge._guarded_system("extra context")
+
+
+def test_no_request_builder_omits_the_system_prompt():
+    """Static check across bridge.py, so a new request path cannot skip them."""
+    import ast
+    import inspect
+
+    from jobmonger import bridge
+
+    source = inspect.getsource(bridge)
+    tree = ast.parse(source)
+
+    builders = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"send", "stream", "check_reachable"}
+    ]
+    assert len(builders) == 3, "a request path was added or renamed — check it too"
+
+    for node in builders:
+        body = ast.unparse(node)
+        assert "_guarded_system" in body, (
+            f"bridge.{node.name}() builds a request without the guardrails"
+        )
 
 
 # -- decision friction ------------------------------------------------------

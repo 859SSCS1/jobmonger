@@ -11,45 +11,42 @@ identifier. No candidate names are proposed anywhere in this repository.
 
 ---
 
-## Blocking — needed before first public release
+## Settled
 
-### B1 · Guardrail wording outstanding — both disclaimers are now final
+### B1 · All legal text is final — **closed 2026-07-27**
 
-| Constant | Status |
-|---|---|
-| `SHORT_DISCLAIMER` | **Final**, verbatim from the build spec (2026-07-27) |
-| `LONG_DISCLAIMER` | **Final**, verbatim from the build spec (2026-07-27) |
-| `GUARDRAILS` | **Placeholder** — wording still needed |
+| Constant | Audience | Status |
+|---|---|---|
+| `SHORT_DISCLAIMER` | User, every output | **Final**, verbatim |
+| `LONG_DISCLAIMER` | User, first run | **Final**, verbatim |
+| `GUARDRAILS` | Model, every request | **Final**, verbatim |
 
-Both user-facing disclaimers are in place character for character, including
-the em dash in the short form, the en dash in "attorney–client", and the
-straight quotes around `"as is,"`. They are locked by SHA-256 checksums in
-`tests/test_invariants.py`, so a smart-quote substitution or an accidental
-reflow fails the build rather than shipping. A checksum failure is not a licence
-to update the checksum — it means the text changed and should be restored.
+All three are reproduced character for character and locked by SHA-256 in
+`tests/test_invariants.py`. The guardrails checksum covers the **original line
+breaks** as well as the words, so re-wrapping the paragraphs fails the build
+even though no word changed — deliberate, since a formatter would otherwise
+re-flow prompt text without anyone noticing.
 
-**What `GUARDRAILS` is for, since it is a different kind of text.** The two
-disclaimers are addressed to the *user*. `GUARDRAILS` is addressed to the
-*model*: it is appended verbatim to the system prompt of every request the
-bridge sends, and it is the behavioural half of enforcing the scope doc's legal
-guardrails.
+**A checksum failure is not a licence to update the checksum.** It means the
+text changed. Restore it, or — if the owner genuinely supplied new wording —
+replace text and checksum together in one commit.
 
-Structure covers what it can — the model is never given a real name, so it
-cannot build a named dossier no matter what it is told. But **renders no legal
-verdict**, **places no one in a job**, and **fabricates nothing** are
-behavioural boundaries with nothing structural to bite on. The only thing
-standing behind those three is what the model is instructed, on every request.
+Beyond the checksums, named assertions cover the characters most likely to be
+"corrected" by an editor: the em dash in the short disclaimer, the en dash in
+"attorney–client", the straight quotes around `"as is,"`, the eight em dashes
+in the guardrails, the bracketed role tokens `[MANAGER]` / `[HR_REP]` /
+`[COWORKER_1]`, and the straight apostrophes in "user's" and "role's".
 
-A working placeholder is in the file so the mechanism runs end to end. It is not
-owner-approved wording. If you would like to supply it, what is needed is a
-short block of instructions written *to the model*, covering at minimum those
-three boundaries plus "describe roles by duties, never by the character or
-motives of the person holding them".
+`GUARDRAILS` is appended to the system prompt of **every** model request,
+including the connectivity probe, which carries no user content. That path was
+originally exempt; it no longer is, because "every request" is easier to verify
+and to keep true than "every request except the one we judged harmless". A
+static test walks `bridge.py` and fails if any request builder omits it.
 
-Until it is supplied, the startup warning still fires and the first-run banner
-still shows — both now name `GUARDRAILS` specifically and state that the
-disclaimers the user is shown are final, so the notice cannot be misread as the
-legal text being unfinished.
+The placeholder mechanism (`PLACEHOLDER_MARK`, `all_placeholders()`, the startup
+notice, the first-run banner) is retained rather than deleted, so any text added
+here later can be marked provisional and will surface until it is settled.
+Nothing currently carries the mark, and the startup notice no longer fires.
 
 ### B2 · Legal review of the guardrail phrasing
 
