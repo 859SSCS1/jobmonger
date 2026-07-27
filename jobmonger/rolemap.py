@@ -29,10 +29,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from . import log
-from .bridge import BridgeError, send
+from .bridge import BridgeError, Effort, directive, send
 from .config import Config
 from .constants import with_short_disclaimer
 from .facts import Certainty
+from .prompts import Task
 from .redaction import (
     REID_TEAM_SIZE_THRESHOLD,
     PERSON_ROLES,
@@ -50,77 +51,8 @@ _DIRECTION_LABELS: dict[Direction, str] = {
     "against_user": "Works against you",
 }
 
-_INSTRUCTION = """
-Below are the facts established from a document, and a list of the role labels
-that appear in it. For each role label, set out what the role is obligated to
-do — not what the person holding it is like.
-
-For each duty give:
-  - `direction`: "to_company" if the duty runs to the organisation,
-    "for_user" if it runs to the reader's benefit, "against_user" if
-    performing it properly works against the reader's interest.
-  - `duty`: the obligation, in one plain sentence.
-  - `quote`: the shortest exact span from the material that supports it, copied
-    verbatim. If nothing supports it, do not include the duty.
-  - `certainty`: "stated" if the material says it outright, "implied" if it
-    follows from what is said, "unclear" if it is gestured at but unsettled.
-
-The "against_user" direction is the important one and the easiest to get wrong.
-It does not mean hostility. A duty to document concerns, to enforce a policy
-consistently, or to escalate a repeated issue may be entirely proper and still
-cut against this reader. Name those plainly. Do not soften them, and do not
-dress them up as malice either.
-
-Rules:
-  - Describe the role, never the individual. You are seeing labels such as
-    [MANAGER] or [HR_REP]; treat each as a position that anyone could hold.
-  - Do not speculate about the character, feelings, motives, or intentions of
-    whoever holds a role.
-  - Do not invent duties that the material does not support. A role with
-    nothing established about it should come back with no duties rather than
-    plausible-sounding ones.
-  - Do not state or imply that any duty was breached. What a role is obligated
-    to do is in scope; whether someone failed to do it is not.
-"""
-
-_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "roles": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "token": {"type": "string"},
-                    "duties": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "direction": {
-                                    "type": "string",
-                                    "enum": ["to_company", "for_user", "against_user"],
-                                },
-                                "duty": {"type": "string"},
-                                "quote": {"type": "string"},
-                                "certainty": {
-                                    "type": "string",
-                                    "enum": ["stated", "implied", "unclear"],
-                                },
-                            },
-                            "required": ["direction", "duty", "quote", "certainty"],
-                            "additionalProperties": False,
-                        },
-                    },
-                },
-                "required": ["token", "duties"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["roles"],
-    "additionalProperties": False,
-}
+# The instruction, the system note, and the JSON schema live in prompts.py.
+# See DECISIONS.md item X8: bridge takes no text from callers.
 
 
 @dataclass(frozen=True)
@@ -234,17 +166,7 @@ def extract(sealed: SealedText, review: Review, facts_text: str, *,
     )
     payload = reseal_derived(sealed, body)
 
-    reply = send(
-        payload,
-        _INSTRUCTION,
-        cfg=cfg,
-        effort="high",
-        schema=_SCHEMA,
-        system_extra=(
-            "You are mapping obligations attached to positions, not judging people. "
-            "Every label you see stands for a role that anyone could hold."
-        ),
-    )
+    reply = send(payload, directive(Task.ROLE_MAP, effort=Effort.HIGH), cfg=cfg)
 
     try:
         payload_json = json.loads(reply.text)

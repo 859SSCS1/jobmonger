@@ -2,34 +2,45 @@
 
 If you are auditing the privacy claim, this file and ``redaction.py`` are the
 two you need. Everything else is local by construction; this is the single
-place where anything leaves the machine, and it accepts only a ``SealedText``.
+place where anything leaves the machine.
 
-Written against ``urllib`` rather than a vendor SDK on purpose. Two reasons:
-the entire egress surface stays readable in one file with no transitive
-dependencies for an auditor to chase, and a project whose central promise is
-"nothing leaves except what you approved" should not ask anyone to take a
-dependency tree on faith.
+Two things can reach the model, and both are locked:
 
-Provider defaults are PROVISIONAL — see DECISIONS.md item P5.
+* the **payload**, which must be a ``SealedText`` — only ``redaction.seal()``
+  can mint one, and only after a human has reviewed every detected name;
+* the **directive**, which must be a ``Directive`` — only ``bridge.directive()``
+  can mint one, and it assembles text exclusively from ``prompts.py`` using
+  arguments that cannot carry text (an enum, an int, a bool).
+
+There is no third thing, and there is no string parameter on either public
+function. That is deliberate, and it is the fix for DECISIONS.md item X6: the
+old signature took an ``instruction: str``, the dial interpolated the user's
+typed question into it, and a question sailed past a gate that was guarding
+only the payload beside it. Patching that call site fixed that bug and left the
+next module free to repeat it. Removing the parameter fixes the class.
+
+Written against ``urllib`` rather than a vendor SDK on purpose: the entire
+egress surface stays readable in one file with no transitive dependencies for
+an auditor to chase.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterator
 
 from . import config as config_module
-from . import constants, log
+from . import constants, log, prompts
 from .config import ANTHROPIC_VERSION, Config
+from .prompts import Task
 from .redaction import SealedText
 
-# Generous: an Opus 5 request at high effort on a long handbook can think for a
-# while before the first byte. Too short a timeout here reads to the user as
-# "the tool is broken" when it is in fact working.
 CONNECT_TIMEOUT_SECONDS = 30
 READ_TIMEOUT_SECONDS = 600
 
@@ -44,6 +55,19 @@ DEFAULT_MAX_TOKENS = 16_000
 # fallbacks re-run a declined request on another model inside the same call
 # rather than handing the user a dead end at the worst possible moment.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+# A model name is transmitted verbatim in the request body, and it comes from a
+# text box in Settings. Constraining its shape closes the last non-payload route
+# by which a user could put arbitrary words on the wire — see DECISIONS.md X8.
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+class Effort(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
 
 
 class BridgeError(Exception):
@@ -62,35 +86,107 @@ class Reply:
     output_tokens: int = 0
 
 
-def _guarded_system(extra: str = "") -> str:
-    """Every system prompt, with the guardrails attached. No exceptions.
+# --------------------------------------------------------------------------
+# Directive — the second sealed thing
+# --------------------------------------------------------------------------
 
-    Structural enforcement does the real work (a model cannot leak a name it was
-    never given), but the guardrails are also stated to the model every time,
-    because the boundaries this project cares about — no verdict, no dossiers,
-    no fabrication — are behavioural rather than structural.
+_DIRECTIVE_MINT = object()
+
+
+class Directive:
+    """What the model is being asked to do. Cannot be constructed directly.
+
+    Same shape as ``SealedText`` and for the same reason: the value is only
+    trustworthy because of the checks performed on the way to creating it, so
+    the constructor is closed and ``directive()`` is the only door.
+
+    A caller cannot put words in one. ``directive()`` takes a ``Task``, an int,
+    a bool, and an ``Effort`` — none of which can carry text — and looks the
+    wording up in ``prompts.py``.
     """
-    parts = [constants.GUARDRAILS.strip()]
-    if extra.strip():
-        parts.append(extra.strip())
-    return "\n\n".join(parts)
+
+    __slots__ = ("_task", "_instruction", "_note", "_schema", "_effort")
+
+    def __init__(self, task: Task, instruction: str, note: str,
+                 schema: dict | None, effort: Effort, *, _mint: object = None) -> None:
+        if _mint is not _DIRECTIVE_MINT:
+            raise TypeError(
+                "Directive cannot be constructed directly. Use bridge.directive(), "
+                "which assembles wording from prompts.py — there is no supported "
+                "way to send the model text of your own."
+            )
+        object.__setattr__(self, "_task", task)
+        object.__setattr__(self, "_instruction", instruction)
+        object.__setattr__(self, "_note", note)
+        object.__setattr__(self, "_schema", schema)
+        object.__setattr__(self, "_effort", effort)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("Directive is immutable.")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("Directive is immutable.")
+
+    def __reduce__(self):
+        raise TypeError("Directive cannot be pickled; rebuild it with bridge.directive().")
+
+    @property
+    def task(self) -> Task:
+        return self._task
+
+    @property
+    def instruction(self) -> str:
+        return self._instruction
+
+    @property
+    def note(self) -> str:
+        return self._note
+
+    @property
+    def schema(self) -> dict | None:
+        return self._schema
+
+    @property
+    def effort(self) -> Effort:
+        return self._effort
+
+    def __repr__(self) -> str:
+        return f"<Directive task={self._task.value} effort={self._effort.value}>"
+
+
+def directive(task: Task, *, posture: int = 0, has_question: bool = False,
+              effort: Effort = Effort.HIGH) -> Directive:
+    """Mint a directive. The only way to give the model an instruction.
+
+    Every argument is a controlled value. There is no parameter here — and none
+    on ``send`` or ``stream`` — through which a caller could pass a string of
+    their own, which is what makes X6 structurally unrepeatable rather than a
+    rule someone has to remember.
+    """
+    if not isinstance(task, Task):
+        raise TypeError(f"Expected a prompts.Task member, got {type(task).__name__}.")
+    if not isinstance(effort, Effort):
+        raise TypeError(f"Expected a bridge.Effort member, got {type(effort).__name__}.")
+
+    instruction, note, schema = prompts.build(
+        task, posture=posture, has_question=has_question
+    )
+    return Directive(task, instruction, note, schema, effort, _mint=_DIRECTIVE_MINT)
+
+
+# --------------------------------------------------------------------------
+# Gates
+# --------------------------------------------------------------------------
 
 
 def _require_sealed(payload: object) -> SealedText:
-    """The gate. Nothing reaches the network without passing through here.
+    """The payload gate. Nothing reaches the network without passing here.
 
     Note ``type(...) is`` rather than ``isinstance``. That is not a style
     preference — it closes a real hole. ``isinstance`` accepts subclasses, and a
-    subclass can define its own ``__init__`` that never asks for the mint:
-
-        class Sneaky(SealedText):
-            def __init__(self): pass        # no mint, no redaction, no scan
-
-    Under ``isinstance`` that object is waved straight through to the network
-    carrying whatever text it likes. Under an exact type check it is refused.
-    The suite proves both halves — see
-    ``tests/test_egress.py::test_send_refuses_a_subclass_shaped_impostor``,
-    which is what found this in the first place.
+    subclass can define its own ``__init__`` that never asks for the mint,
+    producing an object that carries arbitrary un-redacted text and satisfies
+    every other check. See ``tests/test_egress.py``.
     """
     if type(payload) is not SealedText:
         raise TypeError(
@@ -101,7 +197,46 @@ def _require_sealed(payload: object) -> SealedText:
     return payload
 
 
-def _post(url: str, headers: dict[str, str], body: dict, *, stream: bool):
+def _require_directive(value: object) -> Directive:
+    """The instruction gate. A bare string is refused, however well-intentioned."""
+    if type(value) is not Directive:
+        raise TypeError(
+            "Instructions must be a Directive from bridge.directive(), not "
+            f"{type(value).__name__}. Wording lives in prompts.py; if you need "
+            "the model to be told something new, add it there."
+        )
+    return value
+
+
+def _require_model_name(model: str) -> str:
+    if not _MODEL_NAME_RE.match(model or ""):
+        raise BridgeError(
+            "That does not look like a model name. Model names are short "
+            "identifiers such as claude-opus-5, with no spaces."
+        )
+    return model
+
+
+def _guarded_system(note: str = "") -> str:
+    """Every system prompt, with the owner-supplied guardrails attached.
+
+    Structural enforcement does the real work — a model cannot leak a name it
+    was never given — but the guardrails are also stated every time, because
+    "render no verdict", "place no one", and "fabricate nothing" are behavioural
+    boundaries with nothing structural to bite on.
+    """
+    parts = [constants.GUARDRAILS.strip()]
+    if note.strip():
+        parts.append(note.strip())
+    return "\n\n".join(parts)
+
+
+# --------------------------------------------------------------------------
+# HTTP
+# --------------------------------------------------------------------------
+
+
+def _post(url: str, headers: dict[str, str], body: dict):
     """One HTTP POST. Certificate verification is never disabled."""
     data = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
@@ -147,11 +282,6 @@ def _http_error(exc: urllib.error.HTTPError) -> BridgeError:
     return BridgeError(f"The model service returned an error{': ' + message if message else ''}.")
 
 
-# --------------------------------------------------------------------------
-# Anthropic
-# --------------------------------------------------------------------------
-
-
 def _anthropic_headers(key: str) -> dict[str, str]:
     return {
         "content-type": "application/json",
@@ -161,22 +291,45 @@ def _anthropic_headers(key: str) -> dict[str, str]:
     }
 
 
-def _anthropic_body(cfg: Config, system: str, prompt: str, *, effort: str,
-                    schema: dict | None, stream: bool) -> dict:
-    output_config: dict = {"effort": effort}
-    if schema is not None:
-        output_config["format"] = {"type": "json_schema", "schema": schema}
+def _openai_headers(key: str) -> dict[str, str]:
+    return {"content-type": "application/json", "authorization": f"Bearer {key}"}
 
-    body: dict = {
-        "model": cfg.model,
-        "max_tokens": DEFAULT_MAX_TOKENS,
-        "system": system,
-        "messages": [{"role": "user", "content": prompt}],
-        "output_config": output_config,
-        # Route a policy decline to a capable substitute rather than failing.
-        "fallbacks": "default",
-    }
-    if stream:
+
+def _build_body(cfg: Config, spec: Directive, sealed: SealedText, *, streaming: bool) -> dict:
+    """Assemble the request. Every field is either config, a constant, or sealed."""
+    system = _guarded_system(spec.note)
+    prompt = f"{spec.instruction.strip()}\n\n---\n\n{sealed.text}"
+    model = _require_model_name(cfg.model)
+
+    if cfg.provider == "anthropic":
+        output_config: dict = {"effort": spec.effort.value}
+        if spec.schema is not None:
+            output_config["format"] = {"type": "json_schema", "schema": spec.schema}
+        body: dict = {
+            "model": model,
+            "max_tokens": DEFAULT_MAX_TOKENS,
+            "system": system,
+            "messages": [{"role": "user", "content": prompt}],
+            "output_config": output_config,
+            # Route a policy decline to a capable substitute rather than failing.
+            "fallbacks": "default",
+        }
+    else:
+        body = {
+            "model": model,
+            "max_tokens": DEFAULT_MAX_TOKENS,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        if spec.schema is not None:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "result", "strict": True, "schema": spec.schema},
+            }
+
+    if streaming:
         body["stream"] = True
     return body
 
@@ -202,12 +355,30 @@ def _anthropic_text(payload: dict) -> Reply:
     )
 
 
+def _openai_text(payload: dict) -> Reply:
+    choices = payload.get("choices") or []
+    if not choices:
+        raise BridgeError("The model service returned an empty response.")
+    first = choices[0]
+    if first.get("finish_reason") == "content_filter":
+        raise RefusedError(
+            "The model service's content filter declined this request. "
+            "Nothing was wrong with what you sent."
+        )
+    usage = payload.get("usage", {}) or {}
+    return Reply(
+        text=(first.get("message", {}).get("content") or "").strip(),
+        model=payload.get("model", ""),
+        input_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        output_tokens=int(usage.get("completion_tokens", 0) or 0),
+    )
+
+
 def _anthropic_stream(response) -> Iterator[str]:
-    """Yield text deltas from an Anthropic SSE stream."""
     refused = False
     for raw in response:
         line = raw.decode("utf-8", "replace").strip()
-        if not line or not line.startswith("data:"):
+        if not line.startswith("data:"):
             continue
         chunk = line[5:].strip()
         if not chunk or chunk == "[DONE]":
@@ -226,62 +397,15 @@ def _anthropic_stream(response) -> Iterator[str]:
             if event.get("delta", {}).get("stop_reason") == "refusal":
                 refused = True
         elif kind == "error":
-            message = event.get("error", {}).get("message", "the model service reported an error")
-            raise BridgeError(message)
+            raise BridgeError(
+                event.get("error", {}).get("message", "the model service reported an error")
+            )
 
     if refused:
         raise RefusedError(
             "The model service declined partway through this request. "
             "Nothing was wrong with what you sent."
         )
-
-
-# --------------------------------------------------------------------------
-# OpenAI-compatible
-# --------------------------------------------------------------------------
-
-
-def _openai_headers(key: str) -> dict[str, str]:
-    return {"content-type": "application/json", "authorization": f"Bearer {key}"}
-
-
-def _openai_body(cfg: Config, system: str, prompt: str, *, schema: dict | None,
-                 stream: bool) -> dict:
-    body: dict = {
-        "model": cfg.model,
-        "max_tokens": DEFAULT_MAX_TOKENS,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
-    }
-    if schema is not None:
-        body["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {"name": "facts", "strict": True, "schema": schema},
-        }
-    if stream:
-        body["stream"] = True
-    return body
-
-
-def _openai_text(payload: dict) -> Reply:
-    choices = payload.get("choices") or []
-    if not choices:
-        raise BridgeError("The model service returned an empty response.")
-    first = choices[0]
-    if first.get("finish_reason") == "content_filter":
-        raise RefusedError(
-            "The model service's content filter declined this request. "
-            "Nothing was wrong with what you sent."
-        )
-    usage = payload.get("usage", {}) or {}
-    return Reply(
-        text=(first.get("message", {}).get("content") or "").strip(),
-        model=payload.get("model", ""),
-        input_tokens=int(usage.get("prompt_tokens", 0) or 0),
-        output_tokens=int(usage.get("completion_tokens", 0) or 0),
-    )
 
 
 def _openai_stream(response) -> Iterator[str]:
@@ -302,22 +426,7 @@ def _openai_stream(response) -> Iterator[str]:
                 yield piece
 
 
-# --------------------------------------------------------------------------
-# The public surface — both functions take SealedText and nothing else
-# --------------------------------------------------------------------------
-
-
-def send(payload: object, instruction: str, *, cfg: Config | None = None,
-         system_extra: str = "", effort: str = "high",
-         schema: dict | None = None) -> Reply:
-    """Send sealed content and wait for the whole reply.
-
-    ``payload`` is annotated ``object`` deliberately: the type check is a
-    runtime gate, not a hint a caller can silence with a cast or an ignore
-    comment. Passing anything but a ``SealedText`` raises.
-    """
-    sealed = _require_sealed(payload)
-    cfg = cfg or config_module.load()
+def _credentials(cfg: Config) -> tuple[str, str]:
     key = config_module.resolve_key(cfg.provider)
     if not key:
         raise BridgeError(
@@ -327,29 +436,42 @@ def send(payload: object, instruction: str, *, cfg: Config | None = None,
     endpoint = cfg.endpoint()
     if not endpoint:
         raise BridgeError("No model endpoint is configured. Check Settings.")
+    return key, endpoint
 
-    system = _guarded_system(system_extra)
-    prompt = f"{instruction.strip()}\n\n---\n\n{sealed.text}"
 
-    if cfg.provider == "anthropic":
-        headers = _anthropic_headers(key)
-        body = _anthropic_body(cfg, system, prompt, effort=effort, schema=schema, stream=False)
-    else:
-        headers = _openai_headers(key)
-        body = _openai_body(cfg, system, prompt, schema=schema, stream=False)
+# --------------------------------------------------------------------------
+# The public surface — two sealed arguments, no strings
+# --------------------------------------------------------------------------
+
+
+def send(payload: object, spec: object, *, cfg: Config | None = None) -> Reply:
+    """Send sealed content with a minted directive, and wait for the reply.
+
+    Both arguments are annotated ``object`` deliberately: the type checks are
+    runtime gates, not hints a caller can silence with a cast or an ignore
+    comment.
+    """
+    sealed = _require_sealed(payload)
+    spec_ = _require_directive(spec)
+    cfg = cfg or config_module.load()
+    key, endpoint = _credentials(cfg)
+
+    headers = _anthropic_headers(key) if cfg.provider == "anthropic" else _openai_headers(key)
+    body = _build_body(cfg, spec_, sealed, streaming=False)
 
     log.record(
         "bridge.request",
         provider=cfg.provider,
         model=cfg.model,
+        task=spec_.task.value,
         source_name=sealed.source_name,
         entities_redacted=sealed.entity_count,
         streamed=False,
-        effort=effort,
-        structured=schema is not None,
+        effort=spec_.effort.value,
+        structured=spec_.schema is not None,
     )
 
-    with _post(endpoint, headers, body, stream=False) as response:
+    with _post(endpoint, headers, body) as response:
         raw = response.read().decode("utf-8", "replace")
     try:
         payload_json = json.loads(raw)
@@ -361,57 +483,42 @@ def send(payload: object, instruction: str, *, cfg: Config | None = None,
         "bridge.reply",
         provider=cfg.provider,
         model=reply.model or cfg.model,
+        task=spec_.task.value,
         input_tokens=reply.input_tokens,
         output_tokens=reply.output_tokens,
     )
     return reply
 
 
-def stream(payload: object, instruction: str, *, cfg: Config | None = None,
-           system_extra: str = "", effort: str = "high") -> Iterator[str]:
-    """Send sealed content and yield text as it arrives.
-
-    Used for anything the user is waiting on — a dialed reading, chiefly. The
-    fact layer deliberately does not stream; see DECISIONS.md item X2.
-    """
+def stream(payload: object, spec: object, *, cfg: Config | None = None) -> Iterator[str]:
+    """Send sealed content with a minted directive, yielding text as it arrives."""
     sealed = _require_sealed(payload)
+    spec_ = _require_directive(spec)
     cfg = cfg or config_module.load()
-    key = config_module.resolve_key(cfg.provider)
-    if not key:
-        raise BridgeError(
-            "No model key is set. Add one in Settings, or set JOBMONGER_API_KEY "
-            "in your environment."
-        )
-    endpoint = cfg.endpoint()
-    if not endpoint:
-        raise BridgeError("No model endpoint is configured. Check Settings.")
-
-    system = _guarded_system(system_extra)
-    prompt = f"{instruction.strip()}\n\n---\n\n{sealed.text}"
+    key, endpoint = _credentials(cfg)
 
     if cfg.provider == "anthropic":
-        headers = _anthropic_headers(key)
-        body = _anthropic_body(cfg, system, prompt, effort=effort, schema=None, stream=True)
-        reader = _anthropic_stream
+        headers, reader = _anthropic_headers(key), _anthropic_stream
     else:
-        headers = _openai_headers(key)
-        body = _openai_body(cfg, system, prompt, schema=None, stream=True)
-        reader = _openai_stream
+        headers, reader = _openai_headers(key), _openai_stream
+    body = _build_body(cfg, spec_, sealed, streaming=True)
 
     log.record(
         "bridge.request",
         provider=cfg.provider,
         model=cfg.model,
+        task=spec_.task.value,
         source_name=sealed.source_name,
         entities_redacted=sealed.entity_count,
         streamed=True,
-        effort=effort,
+        effort=spec_.effort.value,
     )
 
-    with _post(endpoint, headers, body, stream=True) as response:
+    with _post(endpoint, headers, body) as response:
         yield from reader(response)
 
-    log.record("bridge.reply", provider=cfg.provider, model=cfg.model, streamed=True)
+    log.record("bridge.reply", provider=cfg.provider, model=cfg.model,
+               task=spec_.task.value, streamed=True)
 
 
 def check_reachable(cfg: Config | None = None) -> str:
@@ -419,43 +526,38 @@ def check_reachable(cfg: Config | None = None) -> str:
 
     Deliberately not routed through ``send()``: there is no document, so there
     is nothing to seal, and inventing a fake ``SealedText`` to satisfy the gate
-    would be exactly the kind of shortcut that erodes it. This builds its own
-    request from a constant string that contains nothing of the user's.
+    would be exactly the kind of shortcut that erodes it. The request is built
+    here from constants only — the probe text comes from ``prompts.py`` like
+    every other word, and the guardrails ride along as on every request.
     """
     cfg = cfg or config_module.load()
-    key = config_module.resolve_key(cfg.provider)
-    if not key:
-        raise BridgeError("No model key is set.")
-    endpoint = cfg.endpoint()
-    if not endpoint:
-        raise BridgeError("No model endpoint is configured.")
+    key, endpoint = _credentials(cfg)
+    model = _require_model_name(cfg.model)
 
-    # The guardrails ride on this too. It carries no user content, so they are
-    # not protecting anything here — but "every request" is easier to verify,
-    # and to keep true, than "every request except the one we decided was fine".
-    probe = "Reply with the single word: ready"
-    system = _guarded_system()
+    spec = directive(Task.CONNECTIVITY_PROBE, effort=Effort.LOW)
+    system = _guarded_system(spec.note)
+
     if cfg.provider == "anthropic":
         headers = _anthropic_headers(key)
         body = {
-            "model": cfg.model,
+            "model": model,
             "max_tokens": 2048,
             "system": system,
-            "messages": [{"role": "user", "content": probe}],
-            "output_config": {"effort": "low"},
+            "messages": [{"role": "user", "content": spec.instruction}],
+            "output_config": {"effort": spec.effort.value},
         }
     else:
         headers = _openai_headers(key)
         body = {
-            "model": cfg.model,
+            "model": model,
             "max_tokens": 16,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": probe},
+                {"role": "user", "content": spec.instruction},
             ],
         }
 
-    with _post(endpoint, headers, body, stream=False) as response:
+    with _post(endpoint, headers, body) as response:
         payload = json.loads(response.read().decode("utf-8", "replace"))
     reply = _anthropic_text(payload) if cfg.provider == "anthropic" else _openai_text(payload)
     log.record("bridge.check", provider=cfg.provider, model=reply.model or cfg.model, ok=True)

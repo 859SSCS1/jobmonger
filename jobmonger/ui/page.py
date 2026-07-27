@@ -353,6 +353,17 @@ PAGE = r"""<!doctype html>
           </div>
           <div class="disclaimer" id="rolemap-disclaimer"></div>
         </section>
+        <section class="card" style="margin-top:14px">
+          <div class="small muted" style="margin-bottom:2px">How long they have been there</div>
+          <div class="small muted" style="margin-bottom:12px">Optional. Length of service is sent as a band, never an exact figure.</div>
+          <div id="tenure-inputs"><span class="muted small">Confirm some people first.</span></div>
+          <div id="tenure-body"></div>
+          <div class="actions">
+            <button id="tenure-go">Read what that suggests</button>
+            <span id="tenure-status" class="small muted"></span>
+          </div>
+          <div class="disclaimer" id="tenure-disclaimer"></div>
+        </section>
         <div class="actions"><button class="ghost small" id="read-restart">Open a different document</button></div>
       </div>
     </div>
@@ -561,6 +572,40 @@ function renderRoleMap() {
   $("rolemap-disclaimer").textContent = STATE.short_disclaimer;
 }
 
+function renderTenure() {
+  const box = $("tenure-inputs");
+  const people = (STATE.entities || []).filter((e) =>
+    !["CONTACT", "IDENTIFIER", "EMPLOYER"].includes(e.role));
+  box.innerHTML = people.length
+    ? people.map((e) => `<div class="row" style="margin-bottom:8px">
+        <div style="flex:0 0 130px"><span class="token">${esc(e.token)}</span></div>
+        <div style="flex:0 0 120px"><input class="t-years" data-token="${esc(e.token)}"
+          inputmode="decimal" placeholder="years"></div>
+        <div><input class="t-note" data-token="${esc(e.token)}" placeholder="anything else worth knowing (optional)"></div>
+      </div>`).join("")
+    : `<span class="muted small">Confirm some people first.</span>`;
+
+  const t = STATE.tenure;
+  $("tenure-body").innerHTML = t && t.observations.length
+    ? `<div class="small muted" style="margin:10px 0 6px">
+         This is inference from length of service, not fact.
+       </div>`
+      + t.bands.map((b) => {
+          const obs = t.observations.filter((o) => o.token === b.token);
+          if (!obs.length) return "";
+          return `<div class="role"><h4><span class="token">${esc(b.token)}</span>
+            <span class="muted">— ${esc(b.band)}</span></h4>`
+            + obs.map((o) => `<div class="duty">${esc(o.observation)}${
+                o.certainty !== "stated" ? `<span class="tag">${esc(o.certainty)}</span>` : ""
+              }<div class="quote">based on: ${esc(o.basis)}</div></div>`).join("")
+            + `</div>`;
+        }).join("")
+      + (t.reid_notes || []).map((n) =>
+          `<div class="notice warn small" style="margin-top:10px">${esc(n)}</div>`).join("")
+    : "";
+  if (t) $("tenure-disclaimer").textContent = STATE.short_disclaimer;
+}
+
 function renderRead() {
   const sealed = STATE.sealed, f = STATE.facts;
   $("sealed-summary").textContent =
@@ -589,7 +634,22 @@ function renderRead() {
     "The facts on the left are the same at every setting. This changes how they are put to you, not what they are.";
 
   renderRoleMap();
+  renderTenure();
 }
+
+$("tenure-go").onclick = async () => {
+  const inputs = [...document.querySelectorAll(".t-years")].map((el) => ({
+    token: el.dataset.token,
+    years: el.value,
+    note: (document.querySelector(`.t-note[data-token="${el.dataset.token}"]`) || {}).value || "",
+  })).filter((i) => i.years.trim() || i.note.trim());
+  if (!inputs.length) { banner("Add a length of service for at least one person.", "warn"); return; }
+  $("tenure-go").disabled = true;
+  $("tenure-status").textContent = "Reading what that suggests…";
+  try { await api("tenure", { inputs }); $("tenure-status").textContent = ""; }
+  catch (_) { $("tenure-status").textContent = ""; }
+  finally { $("tenure-go").disabled = false; render(); }
+};
 
 $("rolemap-go").onclick = async () => {
   $("rolemap-go").disabled = true;

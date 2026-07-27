@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Iterable, Protocol
 
@@ -121,6 +121,16 @@ class DetectionPolicy:
     include_own_name: bool = False
     own_name: str = ""
     company_name: str = ""
+    #: Whether a capitalised word opening a sentence may be a name.
+    #:
+    #: False for documents: most sentences start with a capital that is just a
+    #: sentence, and exempting them removes an enormous amount of noise.
+    #:
+    #: True for short text the user typed, where the trade inverts. "Devika said
+    #: so." is a note about a person, not prose — and a missed name there is a
+    #: leak, while a false positive is one extra prompt. ``screen_user_text``
+    #: sets this; nothing else should.
+    sentence_start_may_be_a_name: bool = False
 
 
 @dataclass(frozen=True)
@@ -312,7 +322,7 @@ class HeuristicDetector:
             surface, offset = self._trim_opener(match.group(0).strip(), match.start())
             if not surface:
                 continue
-            if self._is_probably_not_a_name(surface, text, offset):
+            if self._is_probably_not_a_name(surface, text, offset, policy):
                 continue
             words = surface.split()
             confidence = Confidence.MEDIUM if len(words) >= 2 else Confidence.LOW
@@ -367,13 +377,17 @@ class HeuristicDetector:
         return " ".join(words), start + removed
 
     @staticmethod
-    def _is_probably_not_a_name(surface: str, text: str, start: int) -> bool:
+    def _is_probably_not_a_name(surface: str, text: str, start: int,
+                                policy: DetectionPolicy) -> bool:
         words = surface.split()
         if any(word.lower().strip(".,'’-") in _NOT_NAMES for word in words):
             return True
         if len(surface) < 3:
             return True
         if len(words) == 1:
+            if policy.sentence_start_may_be_a_name:
+                # Short user-typed text: do not exempt anything on position.
+                return False
             # A lone capitalised word opening a sentence is usually just a
             # sentence. Mid-sentence, it is far more suspicious.
             #
@@ -1016,6 +1030,8 @@ def screen_user_text(text: str, review: Review,
     screened = _apply_substitutions(text, replacements)
 
     policy = policy or DetectionPolicy()
+    # The screening policy is stricter than the document policy on purpose.
+    policy = replace(policy, sentence_start_may_be_a_name=True)
     novel = [
         candidate
         for candidate in _dedupe(

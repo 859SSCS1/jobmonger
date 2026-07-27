@@ -16,10 +16,10 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from . import log
-from .bridge import stream
+from .bridge import Effort, directive, stream
 from .config import Config
-from .constants import FRAMING_BOUNDARY
 from .facts import FactSet, as_sealed
+from .prompts import Task
 from .redaction import Review, SealedText, reseal_derived, screen_user_text
 
 MIN_POSITION = 0
@@ -34,47 +34,9 @@ _PROVISIONAL_LABELS: dict[int, str] = {
     4: "Fully on your side",
 }
 
-#: What each position asks the model to do. The facts are identical at all five.
-_POSTURE: dict[int, str] = {
-    0: (
-        "Present the facts plainly, as a neutral reader would. Give the reading "
-        "most likely to be correct, whether or not it favours the reader. Where "
-        "the facts cut against them, say so directly."
-    ),
-    1: (
-        "Present the facts plainly, but where something genuinely helps the "
-        "reader, make sure they notice it. Do not soften what cuts against them."
-    ),
-    2: (
-        "Give a balanced reading. Set out what helps the reader and what does "
-        "not, with roughly equal care, and say which is stronger."
-    ),
-    3: (
-        "Read these facts the way an advocate for the reader would: lead with "
-        "what supports their position and explain why it matters. Still state "
-        "what cuts against them, clearly, so they are not surprised later."
-    ),
-    4: (
-        "Argue the reader's position as strongly as the facts honestly allow. "
-        "Lead with their strongest ground and develop it fully. You must still "
-        "state what cuts against them — an advocate who hides the weak point "
-        "from their own client is no use to them — but you may put it last and "
-        "put it briefly."
-    ),
-}
-
-# Attached at every position. The dial's whole legitimacy rests on this holding.
-_INVARIANT_RULE = """
-The facts above are fixed. They were established before this request and are
-identical at every setting the reader could have chosen. You are adjusting
-emphasis, order, and tone. You are not adjusting what is true.
-
-Specifically, at every setting:
-  - Do not add a fact that is not listed above.
-  - Do not drop a fact that cuts against the reader.
-  - Do not upgrade an "implied" or "unclear" fact into a settled one.
-  - Do not restate a gap as though the document had answered it.
-"""
+# The posture wording, the invariance rule, and the framing boundary live in
+# prompts.py. Only the display labels above stay here — those are cosmetic
+# and never reach the model. See DECISIONS.md item X8.
 
 
 def label(position: int) -> str:
@@ -119,34 +81,6 @@ class Reading:
         return label(self.position)
 
 
-def _instruction(position: int, has_question: bool) -> str:
-    """Build the instruction. Takes a flag, never the user's words.
-
-    The signature is deliberate. This function used to interpolate the question
-    directly, which put user-typed text into ``bridge.send``'s ``instruction``
-    argument — a parameter that is not sealed and never passes the residual
-    scan. Taking a bool makes that mistake impossible to repeat here: there is
-    no user string in scope to accidentally include.
-    """
-    parts = [_POSTURE[clamp(position)], _INVARIANT_RULE.strip(), FRAMING_BOUNDARY.strip()]
-    if has_question:
-        parts.append(
-            "The reader's question appears at the end of the material below, under "
-            "THE READER ASKED. Answer it from the facts above. If the facts do not "
-            "answer it, say so plainly and say what would be needed to answer it."
-        )
-    else:
-        parts.append(
-            "The reader has not asked anything specific. Give them the reading of "
-            "these facts that would be most useful to someone in their position."
-        )
-    parts.append(
-        "Refer to people only by the role labels shown, such as [MANAGER]. Never "
-        "speculate about who they are."
-    )
-    return "\n\n".join(parts)
-
-
 def render(fact_set: FactSet, sealed: SealedText, position: int, *,
            question: str = "", review: Review | None = None,
            cfg: Config | None = None) -> Iterator[str]:
@@ -188,14 +122,9 @@ def render(fact_set: FactSet, sealed: SealedText, position: int, *,
 
     yield from stream(
         payload,
-        _instruction(position, bool(asked)),
+        directive(Task.DIAL_READING, posture=position,
+                  has_question=bool(asked), effort=Effort.HIGH),
         cfg=cfg,
-        effort="high",
-        system_extra=(
-            "You are writing for one person about their own situation. They may be "
-            "under real stress and may act on what you say. Be clear, be concrete, "
-            "and do not pad. Never claim more certainty than the facts carry."
-        ),
     )
 
 

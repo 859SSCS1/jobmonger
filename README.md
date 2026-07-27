@@ -60,6 +60,7 @@ If you would rather read than run, two files carry the whole claim:
 | [`jobmonger/redaction.py`](jobmonger/redaction.py) | Detection, the human review step, and `seal()` — the one place content is cleared to leave |
 | [`jobmonger/bridge.py`](jobmonger/bridge.py) | The only code here that opens a socket. It accepts nothing but a sealed object |
 | [`jobmonger/constants.py`](jobmonger/constants.py) | The disclaimers you are shown, and the guardrails the model is given on every request |
+| [`jobmonger/prompts.py`](jobmonger/prompts.py) | Every word this tool says to a model. There is nowhere else for one to come from |
 
 ## How the pieces fit
 
@@ -99,7 +100,11 @@ Also built: the role map — what each role around you is obliged to do, split
 into duties owed to the organisation, owed to you, and working against you, with
 a warning when a team is small enough that the role label is thin cover.
 
-Not yet built: tenure reasoning and the handbook compliance companion.
+And tenure: what length of service tends to confer on a position — knowing
+which rules get enforced, who to ask, being believed by default. Sent as a band
+rather than an exact figure, and marked as inference throughout.
+
+Not yet built: the handbook compliance companion.
 
 Every naming and policy question raised while building is collected in
 [DECISIONS.md](DECISIONS.md) rather than settled quietly in the code.

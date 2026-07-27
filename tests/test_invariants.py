@@ -77,10 +77,16 @@ def test_the_dial_module_cannot_reach_document_text():
 
 
 def test_every_position_instruction_carries_the_invariant_rule():
+    from jobmonger import bridge
+    from jobmonger.prompts import Task
+
     for position, _ in dial.positions():
-        instruction = dial._instruction(position, "")
-        assert "The facts above are fixed" in instruction
-        assert "Do not drop a fact that cuts against the reader" in instruction
+        for has_question in (True, False):
+            instruction = bridge.directive(
+                Task.DIAL_READING, posture=position, has_question=has_question
+            ).instruction
+            assert "The facts above are fixed" in instruction
+            assert "Do not drop a fact that cuts against the reader" in instruction
 
 
 def test_positions_are_clamped_rather_than_rejected():
@@ -335,9 +341,15 @@ def test_no_request_builder_omits_the_system_prompt():
 
     for node in builders:
         body = ast.unparse(node)
-        assert "_guarded_system" in body, (
+        # send/stream assemble via _build_body; check_reachable builds its own.
+        assert "_guarded_system" in body or "_build_body" in body, (
             f"bridge.{node.name}() builds a request without the guardrails"
         )
+
+    assert "_guarded_system" in ast.unparse(
+        next(n for n in ast.walk(tree)
+             if isinstance(n, ast.FunctionDef) and n.name == "_build_body")
+    ), "_build_body must attach the guardrails"
 
 
 # -- decision friction ------------------------------------------------------

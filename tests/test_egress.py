@@ -238,14 +238,20 @@ def test_the_dial_refuses_a_question_carrying_an_unreviewed_name(document, grant
 
 
 def test_the_dial_instruction_cannot_contain_user_text():
-    """Structural: _instruction takes a bool, so no user string is in scope."""
+    """Structural: the wording is assembled from controlled values only.
+
+    The instruction no longer exists as a string a caller can build — it is
+    looked up in prompts.py from a posture integer and a bool. See
+    tests/test_boundary.py for the full treatment.
+    """
     import inspect
 
-    from jobmonger import dial
+    from jobmonger import prompts
 
-    signature = inspect.signature(dial._instruction)
-    assert list(signature.parameters) == ["position", "has_question"]
+    signature = inspect.signature(prompts._dial_instruction)
+    assert list(signature.parameters) == ["posture", "has_question"]
     # `from __future__ import annotations` makes annotations strings.
+    assert signature.parameters["posture"].annotation in (int, "int")
     assert signature.parameters["has_question"].annotation in (bool, "bool")
 
 
@@ -267,9 +273,9 @@ def test_a_screened_question_travels_inside_the_sealed_payload(document, granted
 
     captured = {}
 
-    def fake_stream(payload, instruction, **kwargs):
+    def fake_stream(payload, spec, **kwargs):
         captured["payload"] = payload
-        captured["instruction"] = instruction
+        captured["instruction"] = spec.instruction
         return iter(())
 
     monkeypatch.setattr(dial, "stream", fake_stream)

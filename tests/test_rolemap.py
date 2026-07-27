@@ -67,9 +67,9 @@ def stub(monkeypatch):
     """Replace the bridge call, recording everything it was handed."""
     seen = {}
 
-    def fake_send(payload, instruction, **kwargs):
+    def fake_send(payload, spec, **kwargs):
         seen["payload"] = payload
-        seen["instruction"] = instruction
+        seen["instruction"] = spec
         seen.update(kwargs)
         return rolemap.send.__self__ if False else _Reply(json.dumps(REPLY))
 
@@ -144,7 +144,7 @@ def test_the_instruction_frames_against_user_as_duty_not_malice(prepared, stub):
     rolemap.extract(sealed, review, FACTS_TEXT)
     # Whitespace normalised: the instruction is hard-wrapped, so several of
     # these phrases span a line break in the source.
-    instruction = " ".join(stub["instruction"].split())
+    instruction = " ".join(stub["instruction"].instruction.split())
     assert "It does not mean hostility" in instruction
     assert "do not dress them up as malice either" in instruction
 
@@ -176,7 +176,7 @@ def test_a_role_the_user_never_confirmed_is_dropped(prepared, stub, monkeypatch)
 def test_the_instruction_forbids_characterising_individuals(prepared, stub):
     sealed, review = prepared
     rolemap.extract(sealed, review, FACTS_TEXT)
-    instruction = " ".join(stub["instruction"].split())
+    instruction = " ".join(stub["instruction"].instruction.split())
     assert "Describe the role, never the individual" in instruction
     assert "Do not speculate about the character, feelings, motives" in instruction
 
@@ -185,7 +185,7 @@ def test_the_instruction_forbids_declaring_a_breach(prepared, stub):
     """What a role must do is in scope. Whether someone failed to is a verdict."""
     sealed, review = prepared
     rolemap.extract(sealed, review, FACTS_TEXT)
-    normalised = " ".join(stub["instruction"].split())
+    normalised = " ".join(stub["instruction"].instruction.split())
     assert "Do not state or imply that any duty was breached" in normalised
 
 

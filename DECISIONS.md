@@ -148,6 +148,24 @@ is an interface with two implementations.
 are separate files. Documents are **never** copied into this directory — they
 are read from wherever the user keeps them and held in memory only.
 
+### P10 · Length of service is sent as a band, never a figure — **PROVISIONAL**
+
+`[TENURE]` sends "over ten years", not "fourteen years". A band reasons about
+as well and identifies far less: exact service length plus a role plus a small
+team is a name in all but spelling, which is the case the owner-settled
+guardrails already tell the model to back away from. There is no reason to hand
+it the sharpest version of the detail.
+
+Bands in use (`jobmonger/tenure.py::BANDS`), deliberately coarse at the top:
+under a year · one to two years · three to five years · six to ten years · over
+ten years.
+
+**For the owner:** the boundaries are a guess, and the top band is very wide —
+eleven years and twenty-five years read identically. If the distinction matters
+for the kind of situation this is for, the top should split. Also open: whether
+the user's *own* tenure should be banded the same way, or sent exactly, given it
+is their own detail to share.
+
 ### P9 · Decision-friction v1 seed *(scope doc decision #8)*
 The scope doc defers `[DECISION-FRICTION]` but notes the v1 restate-and-confirm
 seed "could ride along cheaply." **In use:** it does — `jobmonger/friction.py`
@@ -240,6 +258,45 @@ the surface but not the offsets — caught by a span/surface alignment check).
 
 Openers are trimmed only from the front of a longer run, never rejected alone,
 so a real name like "May Fletcher" still detects.
+
+### X8 · The bridge takes no text from callers at all — **structural fix for X6**
+
+X6 was fixed at its call site. That fixed the bug and left the next module free
+to repeat it, so the owner asked for the class to be closed rather than the
+instance. It is:
+
+* **All prompt wording moved to `jobmonger/prompts.py`.** One file holds every
+  word this tool ever says to a model. Auditing that is now reading one file
+  rather than grepping a package for fragments.
+* **`bridge.send` / `bridge.stream` take `(payload, spec, *, cfg)` and nothing
+  else.** No string parameter exists to misuse. `spec` must be a `Directive`,
+  minted only by `bridge.directive()`, which takes a `Task` enum, an `int`
+  posture, a `bool`, and an `Effort` enum — none of which can carry a sentence.
+  Same mint pattern as `SealedText`, for the same reason.
+* **Model names are shape-checked.** The model field is a text box in Settings
+  and is transmitted verbatim; `^[A-Za-z0-9._:-]{1,128}$` closes the last
+  non-payload route by which a user could put arbitrary words on the wire.
+
+`tests/test_boundary.py` proves it from two directions: at the wire, by
+capturing the request body and asserting the non-payload half of every prompt is
+a string from `prompts.py`; and at the source, by walking the AST of every
+module and failing if any call site passes anything but a minted directive.
+
+**Residual, accepted:** `base_url` for an OpenAI-compatible endpoint is
+user-supplied and points wherever the user says. That is inherent to bring-your-
+own-endpoint and is the user's choice to make, not a leak to close.
+
+### X9 · Screening is stricter than document detection
+
+Found by a tenure test: `"Devika said so."` escaped screening, because the
+detector exempts a capitalised word opening a sentence. That exemption is right
+for documents — most sentences start with a capital that is just a sentence —
+and wrong for a short typed note, where the same word is very likely a name.
+
+`DetectionPolicy.sentence_start_may_be_a_name` now distinguishes the two, and
+`screen_user_text` sets it. The trade inverts with the context: in a document a
+false positive is noise across hundreds of sentences; in a one-line note it is a
+single extra prompt, and a false negative is a leaked name.
 
 ### X3 · No telemetry means no crash reports
 Stated for completeness: when the tool breaks for a user, the owner will not

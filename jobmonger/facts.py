@@ -29,58 +29,15 @@ from dataclasses import dataclass
 from typing import Literal
 
 from . import log
-from .bridge import BridgeError, Reply, send
+from .bridge import BridgeError, Effort, Reply, directive, send
 from .config import Config
+from .prompts import Task
 from .redaction import SealedText, reseal_derived
 
 Certainty = Literal["stated", "implied", "unclear"]
 
-# Extraction runs at a fixed neutral instruction regardless of where the user
-# has the dial. The dial is applied afterwards, to these results.
-_EXTRACTION_INSTRUCTION = """
-Read the document below and extract what it actually establishes.
-
-For each fact:
-  - `statement`: what the document establishes, in one plain sentence.
-  - `quote`: the shortest exact span from the document that supports it. Copy it
-    verbatim. If you cannot quote it, do not include the fact.
-  - `certainty`: "stated" if the document says it outright, "implied" if it
-    follows from what is said, "unclear" if the document gestures at it without
-    settling it.
-
-Then list `gaps`: things a reader would reasonably expect this document to
-address that it does not. Gaps matter as much as facts here — a person deciding
-what to do next needs to know what their document leaves unanswered.
-
-Be neutral and complete. Do not interpret, advise, or take a side. Include facts
-that are unhelpful to the reader exactly as readily as ones that help them; a
-later step will handle framing, and it can only be honest if this step was.
-
-Names have already been replaced with role labels such as [MANAGER] or
-[HR_REP]. Use those labels as they appear. Do not speculate about who they are.
-"""
-
-_FACT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "facts": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "statement": {"type": "string"},
-                    "quote": {"type": "string"},
-                    "certainty": {"type": "string", "enum": ["stated", "implied", "unclear"]},
-                },
-                "required": ["statement", "quote", "certainty"],
-                "additionalProperties": False,
-            },
-        },
-        "gaps": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["facts", "gaps"],
-    "additionalProperties": False,
-}
+# The instruction, the system note, and the JSON schema all live in prompts.py
+# now. See DECISIONS.md item X8: bridge takes no text from callers.
 
 
 @dataclass(frozen=True)
@@ -140,15 +97,8 @@ def extract(sealed: SealedText, *, cfg: Config | None = None) -> FactSet:
     """
     reply: Reply = send(
         sealed,
-        _EXTRACTION_INSTRUCTION,
+        directive(Task.FACT_EXTRACTION, effort=Effort.HIGH),
         cfg=cfg,
-        effort="high",
-        schema=_FACT_SCHEMA,
-        system_extra=(
-            "You are extracting a neutral, complete record of what a document "
-            "establishes. This record will be reused unchanged at every framing "
-            "setting the reader chooses, so it must not lean in any direction."
-        ),
     )
 
     try:

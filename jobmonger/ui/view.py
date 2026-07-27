@@ -21,7 +21,8 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from .. import config as config_module
-from .. import consent, constants, dial, facts, friction, intake, log, redaction, rolemap
+from .. import (consent, constants, dial, facts, friction, intake, log,
+                redaction, rolemap, tenure)
 from ..bridge import BridgeError, check_reachable
 from ..intake import IntakeError
 from ..redaction import Review, Role, SealError, UnscreenedName
@@ -48,6 +49,7 @@ class Session:
         self.sealed: redaction.SealedText | None = None
         self.fact_set: facts.FactSet | None = None
         self.role_map: rolemap.RoleMap | None = None
+        self.tenure_map: tenure.TenureMap | None = None
         self.last_error: str = ""
 
     def reset_document(self) -> None:
@@ -56,6 +58,7 @@ class Session:
         self.sealed = None
         self.fact_set = None
         self.role_map = None
+        self.tenure_map = None
 
 
 SESSION = Session()
@@ -198,6 +201,20 @@ def _state() -> dict[str, Any]:
             if session.role_map
             else None
         ),
+        "tenure": (
+            {
+                "bands": [{"token": t, "band": b} for t, b in session.tenure_map.bands],
+                "observations": [
+                    {"token": o.token, "observation": o.observation,
+                     "basis": o.basis, "certainty": o.certainty}
+                    for o in session.tenure_map.observations
+                ],
+                "reid_notes": list(session.tenure_map.reidentification_notes),
+                "model": session.tenure_map.model,
+            }
+            if session.tenure_map
+            else None
+        ),
         "dial": {
             "positions": [{"value": v, "label": l} for v, l in dial.positions()],
             "current": cfg.dial_position,
@@ -338,6 +355,30 @@ def _act_rolemap(_: dict) -> dict:
     return {"ok": True}
 
 
+def _act_tenure(body: dict) -> dict:
+    session = SESSION
+    if session.sealed is None or session.fact_set is None or session.review is None:
+        raise IntakeError("Review and read a document first.")
+    inputs: list[tenure.TenureInput] = []
+    for item in body.get("inputs", []):
+        raw = str(item.get("years", "")).strip()
+        try:
+            years = float(raw) if raw else None
+        except ValueError:
+            raise IntakeError(f"'{raw}' is not a number of years.") from None
+        inputs.append(
+            tenure.TenureInput(
+                token=str(item.get("token", "")),
+                years=years,
+                note=str(item.get("note", "")),
+            )
+        )
+    session.tenure_map = tenure.observe(
+        session.sealed, session.review, session.fact_set.render(), inputs
+    )
+    return {"ok": True}
+
+
 def _act_friction(body: dict) -> dict:
     if SESSION.fact_set is None:
         raise IntakeError("Nothing to confirm against yet.")
@@ -366,6 +407,7 @@ ACTIONS: dict[str, Callable[[dict], dict]] = {
     "reject_all_pending": _act_reject_all_pending,
     "seal": _act_seal,
     "rolemap": _act_rolemap,
+    "tenure": _act_tenure,
     "friction": _act_friction,
     "log": _act_log,
 }
