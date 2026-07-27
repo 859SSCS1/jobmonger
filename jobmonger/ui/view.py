@@ -21,10 +21,10 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from .. import config as config_module
-from .. import consent, constants, dial, facts, friction, intake, log, redaction
+from .. import consent, constants, dial, facts, friction, intake, log, redaction, rolemap
 from ..bridge import BridgeError, check_reachable
 from ..intake import IntakeError
-from ..redaction import Review, Role, SealError
+from ..redaction import Review, Role, SealError, UnscreenedName
 from .page import PAGE
 
 #: PROVISIONAL (DECISIONS.md N4) — the repository name, not a product name.
@@ -47,6 +47,7 @@ class Session:
         self.review: Review | None = None
         self.sealed: redaction.SealedText | None = None
         self.fact_set: facts.FactSet | None = None
+        self.role_map: rolemap.RoleMap | None = None
         self.last_error: str = ""
 
     def reset_document(self) -> None:
@@ -54,6 +55,7 @@ class Session:
         self.review = None
         self.sealed = None
         self.fact_set = None
+        self.role_map = None
 
 
 SESSION = Session()
@@ -175,6 +177,27 @@ def _state() -> dict[str, Any]:
             else None
         ),
         "facts": fact_payload,
+        "role_map": (
+            {
+                "roles": [
+                    {
+                        "token": role.token,
+                        "duties": [
+                            {"direction": d.direction, "duty": d.duty,
+                             "quote": d.quote, "certainty": d.certainty}
+                            for d in role.duties
+                        ],
+                        "reidentifiable": role.reidentifiable,
+                        "reidentification_note": role.reidentification_note,
+                    }
+                    for role in session.role_map.roles
+                ],
+                "direction_labels": rolemap._DIRECTION_LABELS,
+                "model": session.role_map.model,
+            }
+            if session.role_map
+            else None
+        ),
         "dial": {
             "positions": [{"value": v, "label": l} for v, l in dial.positions()],
             "current": cfg.dial_position,
@@ -305,6 +328,16 @@ def _act_seal(_: dict) -> dict:
     return {"ok": True}
 
 
+def _act_rolemap(_: dict) -> dict:
+    session = SESSION
+    if session.sealed is None or session.fact_set is None or session.review is None:
+        raise IntakeError("Review and read a document first.")
+    session.role_map = rolemap.extract(
+        session.sealed, session.review, session.fact_set.render()
+    )
+    return {"ok": True}
+
+
 def _act_friction(body: dict) -> dict:
     if SESSION.fact_set is None:
         raise IntakeError("Nothing to confirm against yet.")
@@ -332,6 +365,7 @@ ACTIONS: dict[str, Callable[[dict], dict]] = {
     "add": _act_add,
     "reject_all_pending": _act_reject_all_pending,
     "seal": _act_seal,
+    "rolemap": _act_rolemap,
     "friction": _act_friction,
     "log": _act_log,
 }
@@ -429,7 +463,8 @@ class Handler(BaseHTTPRequestHandler):
                 SESSION.last_error = ""
                 result["state"] = _state()
             _json_response(self, result)
-        except (IntakeError, SealError, BridgeError, consent.ConsentRequired, ValueError, KeyError) as exc:
+        except (IntakeError, UnscreenedName, SealError, BridgeError,
+                consent.ConsentRequired, ValueError, KeyError) as exc:
             SESSION.last_error = str(exc)
             _json_response(self, {"ok": False, "error": str(exc)}, 400)
         except Exception as exc:  # noqa: BLE001
@@ -461,12 +496,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
-            for piece in dial.render(session.fact_set, session.sealed, position, question=question):
+            for piece in dial.render(session.fact_set, session.sealed, position,
+                                     question=question, review=session.review):
                 # Real names are put back here, on this machine, for display
                 # only. They were never sent.
                 emit("delta", {"text": session.sealed.restore(piece)})
             emit("done", {"position": dial.clamp(position), "label": dial.label(position)})
-        except (BridgeError, SealError) as exc:
+        except (BridgeError, SealError, UnscreenedName) as exc:
             emit("error", {"message": str(exc)})
         except Exception as exc:  # noqa: BLE001
             emit("error", {"message": f"Unexpected problem: {exc}"})

@@ -13,8 +13,10 @@ from jobmonger.redaction import (
     Review,
     Role,
     SealError,
+    UnscreenedName,
     assign_tokens,
     detect,
+    screen_user_text,
     seal,
 )
 
@@ -98,6 +100,79 @@ def test_overlapping_detections_are_resolved_not_duplicated(document):
     found = detect(document)
     for a, b in zip(found, found[1:]):
         assert a.end <= b.start, "detections must not overlap after merging"
+
+
+def test_a_sentence_opener_is_not_absorbed_into_a_name():
+    """Found while screening user-typed questions.
+
+    "Did Devika approve it?" was detected as the single name "Did Devika" —
+    which would have been shown for review as such, then substituted whole,
+    leaving "[COWORKER] approve it?" behind.
+    """
+    assert _detector_finds("Did Devika have authority to deny this?", Kind.PERSON) == ["Devika"]
+    assert _detector_finds("Was Sarah Chen allowed to?", Kind.PERSON) == ["Sarah Chen"]
+    assert _detector_finds("Should Reed have been told?", Kind.PERSON) == ["Reed"]
+
+
+def test_trimming_an_opener_keeps_the_span_pointing_at_the_name():
+    """The span drives the highlight and the overlap logic, not just the label."""
+    text = "Did Devika have authority to deny this?"
+    found = [d for d in HeuristicDetector().detect(text, DetectionPolicy()) if d.kind is Kind.PERSON]
+    assert found
+    for candidate in found:
+        assert text[candidate.start : candidate.end] == candidate.surface
+
+
+def test_a_lone_opener_is_not_a_name():
+    assert _detector_finds("Did they approve it?", Kind.PERSON) == []
+    assert _detector_finds("The handbook says so.", Kind.PERSON) == []
+
+
+def test_a_real_name_that_looks_like_an_opener_is_still_found():
+    """Openers are trimmed only from the front of a longer run, never alone."""
+    assert "May Fletcher" in _detector_finds("From: May Fletcher\n", Kind.PERSON)
+
+
+# -- screening text the user typed -------------------------------------------
+
+
+def test_screening_substitutes_a_confirmed_name(document, granted):
+    review = Review(document, detect(document))
+    index = next(i for i, d in enumerate(review.detections) if d.surface == "Sarah Chen")
+    review.confirm_all_matching(index, Role.MANAGER)
+    for remaining in list(review.pending()):
+        review.reject(remaining)
+
+    result = screen_user_text("Could Sarah Chen decide this alone?", review)
+    assert result.is_clear
+    assert "[MANAGER]" in result.text
+
+
+def test_screening_blocks_a_novel_name(document, granted):
+    review = Review(document, detect(document))
+    for index in list(review.pending()):
+        review.reject(index)
+    result = screen_user_text("What did Devika decide?", review)
+    assert not result.is_clear
+    with pytest.raises(UnscreenedName):
+        result.require_clear()
+
+
+def test_screening_ignores_contact_details_the_user_types_about_themselves(document, granted):
+    """The concern is third-party names the user has not reviewed."""
+    review = Review(document, detect(document))
+    for index in list(review.pending()):
+        review.reject(index)
+    result = screen_user_text("My own number is (555) 555-0147, does that matter?", review)
+    assert result.is_clear
+
+
+def test_screening_error_names_what_to_fix(document, granted):
+    review = Review(document, detect(document))
+    for index in list(review.pending()):
+        review.reject(index)
+    with pytest.raises(UnscreenedName, match="Devika"):
+        screen_user_text("Did Devika sign off?", review).require_clear()
 
 
 # -- review -----------------------------------------------------------------

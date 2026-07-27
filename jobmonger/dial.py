@@ -20,7 +20,7 @@ from .bridge import stream
 from .config import Config
 from .constants import FRAMING_BOUNDARY
 from .facts import FactSet, as_sealed
-from .redaction import SealedText
+from .redaction import Review, SealedText, reseal_derived, screen_user_text
 
 MIN_POSITION = 0
 MAX_POSITION = 4
@@ -119,14 +119,21 @@ class Reading:
         return label(self.position)
 
 
-def _instruction(position: int, question: str) -> str:
+def _instruction(position: int, has_question: bool) -> str:
+    """Build the instruction. Takes a flag, never the user's words.
+
+    The signature is deliberate. This function used to interpolate the question
+    directly, which put user-typed text into ``bridge.send``'s ``instruction``
+    argument — a parameter that is not sealed and never passes the residual
+    scan. Taking a bool makes that mistake impossible to repeat here: there is
+    no user string in scope to accidentally include.
+    """
     parts = [_POSTURE[clamp(position)], _INVARIANT_RULE.strip(), FRAMING_BOUNDARY.strip()]
-    if question.strip():
+    if has_question:
         parts.append(
-            "The reader asked:\n"
-            f"    {question.strip()}\n"
-            "Answer that from the facts above. If the facts do not answer it, say "
-            "so plainly and say what would be needed to answer it."
+            "The reader's question appears at the end of the material below, under "
+            "THE READER ASKED. Answer it from the facts above. If the facts do not "
+            "answer it, say so plainly and say what would be needed to answer it."
         )
     else:
         parts.append(
@@ -141,16 +148,34 @@ def _instruction(position: int, question: str) -> str:
 
 
 def render(fact_set: FactSet, sealed: SealedText, position: int, *,
-           question: str = "", cfg: Config | None = None) -> Iterator[str]:
+           question: str = "", review: Review | None = None,
+           cfg: Config | None = None) -> Iterator[str]:
     """Stream a reading of the facts at ``position``.
 
-    Note what is passed to the model: ``as_sealed(fact_set, sealed)`` — the
-    frozen facts, not the document. ``sealed`` is used only to carry the
-    redaction map forward so the reply can have real names restored locally
-    afterwards. The framing step never sees the source text.
+    Note what is passed to the model: the frozen facts, not the document.
+    ``sealed`` is used only to carry the redaction map forward so the reply can
+    have real names restored locally afterwards. The framing step never sees
+    the source text.
+
+    A question, if there is one, is screened against ``review`` and then carried
+    *inside the sealed payload* rather than in the instruction — so it passes
+    the same residual scan the facts do. Asking a question with an unreviewed
+    name in it raises ``UnscreenedName`` and sends nothing.
     """
     position = clamp(position)
-    payload = as_sealed(fact_set, sealed)
+    asked = question.strip()
+    body = fact_set.render()
+
+    if asked:
+        if review is None:
+            raise ValueError(
+                "A question has to be screened before it can be sent, which needs "
+                "the Review it belongs to. Pass review=..."
+            )
+        screened = screen_user_text(asked, review).require_clear()
+        payload = reseal_derived(sealed, f"{body}\n\nTHE READER ASKED\n\n{screened}")
+    else:
+        payload = as_sealed(fact_set, sealed)
 
     log.record(
         "dial.render",
@@ -158,12 +183,12 @@ def render(fact_set: FactSet, sealed: SealedText, position: int, *,
         position=position,
         position_label=label(position),
         fact_count=len(fact_set),
-        has_question=bool(question.strip()),
+        has_question=bool(asked),
     )
 
     yield from stream(
         payload,
-        _instruction(position, question),
+        _instruction(position, bool(asked)),
         cfg=cfg,
         effort="high",
         system_extra=(
@@ -175,9 +200,11 @@ def render(fact_set: FactSet, sealed: SealedText, position: int, *,
 
 
 def render_text(fact_set: FactSet, sealed: SealedText, position: int, *,
-                question: str = "", cfg: Config | None = None) -> Reading:
+                question: str = "", review: Review | None = None,
+                cfg: Config | None = None) -> Reading:
     """Collect a full reading. Convenience wrapper over ``render``."""
-    chunks = list(render(fact_set, sealed, position, question=question, cfg=cfg))
+    chunks = list(render(fact_set, sealed, position, question=question,
+                         review=review, cfg=cfg))
     return Reading(
         position=clamp(position),
         text=sealed.restore("".join(chunks).strip()),

@@ -77,6 +77,14 @@ Numbers are load-bearing; labels are cosmetic and safe to rename.
 ### N4 · The local view's window title and heading
 Currently the repository name. One constant, `jobmonger/ui/view.py::APP_TITLE`.
 
+### N5 · Role-map direction headings
+The three columns are keyed internally as `to_company` / `for_user` /
+`against_user` — those are load-bearing and appear in the model's schema. Their
+display headings are provisional and live in one dict,
+`jobmonger/rolemap.py::_DIRECTION_LABELS`: currently "Owes the organisation",
+"Owes you", "Works against you". The third is the one worth your eye — it has to
+convey *duty that cuts against you* without reading as accusation.
+
 ---
 
 ## Policy — provisional defaults in use
@@ -100,12 +108,15 @@ Whether a second manager becomes `[MANAGER_2]` or collapses into `[MANAGER]`.
 collapsing them silently merges two people's conduct into one narrative. This is
 a correctness choice more than a naming one, but the owner may disagree.
 
-### P4 · Low-headcount re-identification threshold *(scope doc decision #4)*
-**In use:** warn when a role description sits on a team of 5 or fewer. Warn only
+### P4 · Low-headcount re-identification threshold — **settled 2026-07-27 at 8**
+**Owner-supplied:** warn when a role sits on a team of **8 or fewer**. Warn only
 — never block, never silently mask further. One constant,
-`jobmonger/redaction.py::REID_TEAM_SIZE_THRESHOLD`. The `[ROLE-MAP]` module that
-consumes it is deferred past the critical path; the constant and the warning
-path exist now so the threshold has one home.
+`jobmonger/redaction.py::REID_TEAM_SIZE_THRESHOLD`, consumed by `[ROLE-MAP]`.
+
+A related choice made while wiring it: **team sizes are never sent to the
+model.** The headcount is used locally to decide whether to warn. A team size is
+itself a small identifying detail, and there is no reason the model needs it to
+describe what a role is obligated to do.
 
 ### P5 · Model providers at MVP *(scope doc decision #5)*
 **In use:** Anthropic (default, `claude-opus-5`) and any OpenAI-compatible
@@ -193,6 +204,42 @@ Phone numbers, email addresses, and employee identifiers currently take a role
 asks "who are they to you?" about a phone number. It works, but it reads oddly.
 The kind is already known at detection time and could set the role
 automatically. Left as-is rather than expanded past the critical path.
+
+### X6 · The question box was a second path around the seal — **fixed**
+
+Found while working out how the additive modules should handle names, not by a
+test. `bridge.send()` takes a sealed payload **and** an instruction string. The
+document went through `seal()`; the dial interpolated the user's typed question
+straight into the instruction, which is not sealed and never passes the residual
+scan. A question like *"Did Sarah have authority to deny this?"* travelled
+verbatim. The gate was real and the question walked around it.
+
+**Fixed three ways, so it cannot recur:**
+
+1. `redaction.screen_user_text()` applies confirmed substitutions to anything the
+   user types, and refuses on names never reviewed — the same X4 split, applied
+   to the second input.
+2. The screened question now travels **inside the sealed payload**, so it passes
+   the residual scan like everything else.
+3. `dial._instruction()` takes a `bool`, not the question. There is no user
+   string in scope for it to accidentally include.
+
+The general lesson is worth keeping in view for the remaining modules: the seal
+protects the *payload* parameter. Every other argument that reaches `bridge` is
+unprotected by construction, so user input must be routed into the payload
+rather than placed beside it.
+
+### X7 · Sentence openers were being absorbed into names — **fixed**
+
+Surfaced by the fix above, because questions are where it bites. *"Did Devika
+approve it?"* was detected as the single name **"Did Devika"** — which would have
+been shown for review as such, substituted whole, and left "[COWORKER] approve
+it?" behind. A leading opener is now trimmed from a capitalised run, with the
+span corrected so the highlight still points at the name (the first cut moved
+the surface but not the offsets — caught by a span/surface alignment check).
+
+Openers are trimmed only from the front of a longer run, never rejected alone,
+so a real name like "May Fletcher" still detects.
 
 ### X3 · No telemetry means no crash reports
 Stated for completeness: when the tool breaks for a user, the owner will not

@@ -95,9 +95,11 @@ The critical path is built: scaffold, consent gate, config and key handling,
 document intake, the redaction gate, the model bridge, the fact layer, the
 advocacy dial, the local log, and the local view.
 
-Not yet built: role mapping (duties to / for / against you), tenure reasoning,
-and the handbook compliance companion. These sit on top of the spine above
-rather than beside it, which is why they come second.
+Also built: the role map — what each role around you is obliged to do, split
+into duties owed to the organisation, owed to you, and working against you, with
+a warning when a team is small enough that the role label is thin cover.
+
+Not yet built: tenure reasoning and the handbook compliance companion.
 
 Every naming and policy question raised while building is collected in
 [DECISIONS.md](DECISIONS.md) rather than settled quietly in the code.

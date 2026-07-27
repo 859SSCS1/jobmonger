@@ -78,10 +78,10 @@ PERSON_ROLES = frozenset(
     {Role.MANAGER, Role.HR_REP, Role.COWORKER, Role.EXECUTIVE, Role.REPORT, Role.EXTERNAL, Role.SELF}
 )
 
-#: PROVISIONAL (DECISIONS.md P4). Warn when a role sits on a team this small or
-#: smaller — a role label plus a tiny team can re-identify a person as surely as
-#: a name. Warn only; never block, never silently mask further.
-REID_TEAM_SIZE_THRESHOLD = 5
+#: SETTLED by the owner 2026-07-27 (DECISIONS.md P4). Warn when a role sits on a
+#: team this size or smaller — a role label plus a tiny team can re-identify a
+#: person as surely as a name. Warn only; never block, never silently mask.
+REID_TEAM_SIZE_THRESHOLD = 8
 
 
 class Kind(str, Enum):
@@ -220,6 +220,24 @@ _NOT_NAMES = frozenset(
     """.split()
 )
 
+# Capitalised words that open a sentence but never begin a name. These cannot go
+# in _NOT_NAMES: that list rejects an entire run if any word matches, so "Did
+# Devika" would be discarded whole and the real name lost. They are *trimmed*
+# from the front of a run instead.
+#
+# This surfaced with user-typed questions, where nearly every sentence starts
+# with one: "Did Devika approve it?" was detected as the single name "Did
+# Devika", which would have been shown for review as such and then substituted
+# whole, leaving "[COWORKER] approve it?" behind.
+_SENTENCE_OPENERS = frozenset(
+    """
+    a an and as at before but by can could did do does during each every for from
+    had has have how i if in is it may might must my no not of on or our per please
+    shall should since so that the their then there these they this those to was
+    we were what when where whether which while who whom why will with would you your
+    """.split()
+)
+
 _ROLE_HINTS: dict[Role, tuple[str, ...]] = {
     Role.MANAGER: ("manager", "supervisor", "line manager", "team lead", "reports to", "my boss"),
     Role.HR_REP: ("human resources", "hr ", "people team", "people partner", "hrbp"),
@@ -291,8 +309,10 @@ class HeuristicDetector:
                 )
 
         for match in _CAP_RUN_RE.finditer(text):
-            surface = match.group(0).strip()
-            if self._is_probably_not_a_name(surface, text, match.start()):
+            surface, offset = self._trim_opener(match.group(0).strip(), match.start())
+            if not surface:
+                continue
+            if self._is_probably_not_a_name(surface, text, offset):
                 continue
             words = surface.split()
             confidence = Confidence.MEDIUM if len(words) >= 2 else Confidence.LOW
@@ -302,7 +322,7 @@ class HeuristicDetector:
                 else "A single capitalised word that may be a first name."
             )
             found.append(
-                Detection(match.start(), match.start() + len(surface), surface,
+                Detection(offset, offset + len(surface), surface,
                           Kind.PERSON, confidence, reason)
             )
 
@@ -325,6 +345,26 @@ class HeuristicDetector:
                           Confidence.HIGH, reason)
             )
         return out
+
+    @staticmethod
+    def _trim_opener(surface: str, start: int) -> tuple[str, int]:
+        """Drop leading sentence-openers from a capitalised run.
+
+        Returns the trimmed surface and its corrected start offset, so the span
+        still points at the right characters. Returns ("" , start) if nothing is
+        left, which the caller skips.
+        """
+        words = surface.split()
+        removed = 0
+        while len(words) > 1 and words[0].lower().strip(".,'’-") in _SENTENCE_OPENERS:
+            removed += len(words[0]) + 1
+            words = words[1:]
+        if not words:
+            return "", start
+        if words[0].lower().strip(".,'’-") in _SENTENCE_OPENERS:
+            # A lone opener with nothing after it is not a name at all.
+            return "", start
+        return " ".join(words), start + removed
 
     @staticmethod
     def _is_probably_not_a_name(surface: str, text: str, start: int) -> bool:
@@ -904,6 +944,91 @@ def seal(document: Document, review: Review) -> SealedText:
         reid_warnings=len(review.reidentification_warnings()),
     )
     return SealedText(text, surface_to_token, document.source_name, _mint=_MINT)
+
+
+class UnscreenedName(SealError):
+    """User-typed text contains a name that has not been through review."""
+
+    def __init__(self, novel: tuple[Detection, ...]) -> None:
+        self.novel = novel
+        names = ", ".join(sorted({d.surface for d in novel}))
+        super().__init__(
+            f"What you typed contains {len(set(d.surface for d in novel))} name(s) "
+            f"that have not been reviewed: {names}. Either take them out, or add "
+            "them on the review screen so they get a role label like everything else."
+        )
+
+
+@dataclass(frozen=True)
+class ScreenResult:
+    """The outcome of screening something the user typed."""
+
+    text: str
+    #: Names found that are not covered by any confirmed identity. While this is
+    #: non-empty the text must not be sent.
+    novel: tuple[Detection, ...] = ()
+
+    @property
+    def is_clear(self) -> bool:
+        return not self.novel
+
+    def require_clear(self) -> str:
+        if self.novel:
+            raise UnscreenedName(self.novel)
+        return self.text
+
+
+def screen_user_text(text: str, review: Review,
+                     policy: DetectionPolicy | None = None) -> ScreenResult:
+    """Redact a string the *user* typed, before it can be sent anywhere.
+
+    The document goes through ``seal()``. This is the other input — the question
+    box, tenure notes, a compliance query — and it needs the same treatment for
+    the same reason.
+
+    It was originally missed. ``bridge.send()`` takes a sealed payload *and* an
+    instruction string, and the dial interpolated the user's question into the
+    instruction. The payload was airtight; the sentence next to it was not, so
+    "Did Sarah have authority to deny this?" travelled verbatim. The gate was
+    real, and the question walked around it.
+
+    Two passes, in this order:
+
+    1. Every confirmed surface is substituted with its token, so names the user
+       has already reviewed carry their existing label — the same person keeps
+       the same token whether they were named in the document or in the query.
+    2. Detection runs over what remains. Anything still name-shaped is *novel*:
+       never confirmed, so nothing here is entitled to decide it. The caller
+       must refuse to send until the user reviews it.
+
+    This is the same split settled in DECISIONS.md item X4, applied to a second
+    input: known components fold in with provenance, unfamiliar names stay in
+    review.
+    """
+    tokens = assign_tokens(review.entities.values())
+    replacements: list[tuple[str, str]] = []
+    for entity in review.entities.values():
+        token = tokens[entity.entity_id]
+        for surface in entity.surfaces:
+            replacements.append((surface, token))
+    replacements.sort(key=lambda pair: -len(pair[0]))
+
+    screened = _apply_substitutions(text, replacements)
+
+    policy = policy or DetectionPolicy()
+    novel = [
+        candidate
+        for candidate in _dedupe(
+            [d for detector in build_detectors() for d in detector.detect(screened, policy)]
+        )
+        # Contact details the user types about themselves are their own to share;
+        # the concern here is third-party names they have not reviewed.
+        if candidate.kind in (Kind.PERSON, Kind.COMPANY)
+    ]
+
+    if novel:
+        log.record("redaction.user_text_blocked", novel_count=len(novel))
+    return ScreenResult(text=screened, novel=tuple(novel))
 
 
 def _apply_substitutions(text: str, replacements: list[tuple[str, str]]) -> str:

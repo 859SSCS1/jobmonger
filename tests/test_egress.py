@@ -191,6 +191,99 @@ def test_reseal_derived_accepts_clean_derived_content(document, granted):
     assert derived.source_name == sealed.source_name
 
 
+# -- 4b. the other input: text the user types -------------------------------
+#
+# The document goes through seal(). The question box, tenure notes, and
+# compliance queries are a second input and were originally missed: the dial
+# interpolated the user's question into bridge.send()'s `instruction` argument,
+# which is not sealed and never passes the residual scan.
+
+
+def test_a_question_naming_an_unreviewed_person_is_refused(document, granted):
+    review = _reviewed(document)
+    result = redaction.screen_user_text("Did Devika have authority to deny this?", review)
+    assert not result.is_clear
+    assert "Devika" in {d.surface for d in result.novel}
+    with pytest.raises(redaction.UnscreenedName, match="Devika"):
+        result.require_clear()
+
+
+def test_a_question_naming_a_confirmed_person_is_substituted_not_refused(document, granted):
+    """A name the user already reviewed keeps the token it already has."""
+    review = Review(document, detect(document))
+    index = next(i for i, d in enumerate(review.detections) if d.surface == "Sarah Chen")
+    review.confirm_all_matching(index, Role.MANAGER)
+    for remaining in list(review.pending()):
+        review.reject(remaining)
+
+    result = redaction.screen_user_text("Was Sarah Chen allowed to decide this alone?", review)
+    assert result.is_clear
+    assert "Sarah Chen" not in result.text
+    assert "[MANAGER]" in result.text
+
+
+def test_the_dial_refuses_a_question_carrying_an_unreviewed_name(document, granted):
+    """End to end: nothing is sent, and the error names what to fix."""
+    from jobmonger import dial
+    from jobmonger.facts import Fact, FactSet
+
+    review = _reviewed(document)
+    sealed = seal(document, review)
+    fact_set = FactSet(
+        facts=(Fact("The request was declined.", "declined", "stated"),),
+        gaps=(), source_name="letter.txt",
+    )
+    with pytest.raises(redaction.UnscreenedName, match="Devika"):
+        next(dial.render(fact_set, sealed, 2, question="What did Devika decide?", review=review))
+
+
+def test_the_dial_instruction_cannot_contain_user_text():
+    """Structural: _instruction takes a bool, so no user string is in scope."""
+    import inspect
+
+    from jobmonger import dial
+
+    signature = inspect.signature(dial._instruction)
+    assert list(signature.parameters) == ["position", "has_question"]
+    # `from __future__ import annotations` makes annotations strings.
+    assert signature.parameters["has_question"].annotation in (bool, "bool")
+
+
+def test_a_screened_question_travels_inside_the_sealed_payload(document, granted, monkeypatch):
+    """Not alongside it. The question must pass the residual scan too."""
+    from jobmonger import dial
+    from jobmonger.facts import Fact, FactSet
+
+    review = Review(document, detect(document))
+    index = next(i for i, d in enumerate(review.detections) if d.surface == "Sarah Chen")
+    review.confirm_all_matching(index, Role.MANAGER)
+    for remaining in list(review.pending()):
+        review.reject(remaining)
+    sealed = seal(document, review)
+    fact_set = FactSet(
+        facts=(Fact("The request was declined.", "declined", "stated"),),
+        gaps=(), source_name="letter.txt",
+    )
+
+    captured = {}
+
+    def fake_stream(payload, instruction, **kwargs):
+        captured["payload"] = payload
+        captured["instruction"] = instruction
+        return iter(())
+
+    monkeypatch.setattr(dial, "stream", fake_stream)
+    list(dial.render(fact_set, sealed, 2, question="Was Sarah Chen allowed to?", review=review))
+
+    assert isinstance(captured["payload"], SealedText)
+    assert "THE READER ASKED" in captured["payload"].text
+    assert "[MANAGER]" in captured["payload"].text
+    assert "Sarah Chen" not in captured["payload"].text
+    # And nothing of the user's is in the unsealed half of the request.
+    assert "Sarah" not in captured["instruction"]
+    assert "allowed to" not in captured["instruction"]
+
+
 # -- 5. only one module can open a socket ----------------------------------
 
 _NETWORK_MODULES = {

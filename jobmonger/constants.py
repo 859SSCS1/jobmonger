@@ -129,6 +129,16 @@ give the weaker framing rather than the stronger one.
 """
 
 
+def with_short_disclaimer(text: str) -> str:
+    """Attach the short disclaimer to a user-facing analysis.
+
+    One function, so every feature that produces something a person might act on
+    carries the same sentence, from the same constant. A feature that renders its
+    own footer would drift from this one the first time the wording changed.
+    """
+    return f"{text.rstrip()}\n\n---\n{SHORT_DISCLAIMER}"
+
+
 def all_placeholders() -> list[str]:
     """Names of every constant still carrying placeholder text.
 

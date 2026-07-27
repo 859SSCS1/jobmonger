@@ -154,6 +154,19 @@ PAGE = r"""<!doctype html>
     font: 16px/1.8 ui-serif, Georgia, "Times New Roman", serif;
     white-space: pre-wrap; min-height: 220px;
   }
+  .role { border-top: 1px solid var(--line); padding: 12px 0; }
+  .role:first-of-type { border-top: 0; }
+  .role h4 { margin: 0 0 8px; font-size: 13px; }
+  .duty-group { margin: 0 0 8px; }
+  .duty-group .heading {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  }
+  .duty-group.against .heading { color: var(--warn); }
+  .duty { font-size: 13.5px; margin: 3px 0 0; }
+  .duty .quote {
+    color: var(--muted); font: 12.5px/1.55 ui-serif, Georgia, serif;
+    border-left: 2px solid var(--line); padding-left: 9px; margin-top: 3px;
+  }
   .disclaimer {
     margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line);
     color: var(--muted); font-size: 12.5px;
@@ -329,6 +342,16 @@ PAGE = r"""<!doctype html>
           </div>
           <div class="reading" id="reading-body" style="margin-top:16px"></div>
           <div class="disclaimer" id="short-disclaimer"></div>
+        </section>
+        <section class="card" style="margin-top:14px">
+          <div class="small muted" style="margin-bottom:2px">The roles around you</div>
+          <div class="small muted" style="margin-bottom:12px">What each role is obliged to do — including the parts that work against you.</div>
+          <div id="rolemap-body"><span class="muted small">Not mapped yet.</span></div>
+          <div class="actions">
+            <button id="rolemap-go">Map the roles</button>
+            <span id="rolemap-status" class="small muted"></span>
+          </div>
+          <div class="disclaimer" id="rolemap-disclaimer"></div>
         </section>
         <div class="actions"><button class="ghost small" id="read-restart">Open a different document</button></div>
       </div>
@@ -512,6 +535,32 @@ function openDecision(index) {
   };
 }
 
+function renderRoleMap() {
+  const body = $("rolemap-body");
+  const map = STATE.role_map;
+  if (!map) { body.innerHTML = `<span class="muted small">Not mapped yet.</span>`; return; }
+  if (!map.roles.length) {
+    body.innerHTML = `<span class="muted small">No roles were established from this document.</span>`;
+    return;
+  }
+  body.innerHTML = map.roles.map((role) => {
+    const groups = Object.entries(map.direction_labels).map(([key, heading]) => {
+      const duties = role.duties.filter((d) => d.direction === key);
+      if (!duties.length) return "";
+      return `<div class="duty-group ${key === "against_user" ? "against" : ""}">
+        <div class="heading">${esc(heading)}</div>
+        ${duties.map((d) => `<div class="duty">${esc(d.duty)}${
+          d.certainty !== "stated" ? `<span class="tag">${esc(d.certainty)}</span>` : ""
+        }<div class="quote">${esc(d.quote)}</div></div>`).join("")}
+      </div>`;
+    }).join("");
+    const note = role.reidentifiable
+      ? `<div class="notice warn small" style="margin-top:8px">${esc(role.reidentification_note)}</div>` : "";
+    return `<div class="role"><h4><span class="token">${esc(role.token)}</span></h4>${groups}${note}</div>`;
+  }).join("");
+  $("rolemap-disclaimer").textContent = STATE.short_disclaimer;
+}
+
 function renderRead() {
   const sealed = STATE.sealed, f = STATE.facts;
   $("sealed-summary").textContent =
@@ -538,7 +587,17 @@ function renderRead() {
   });
   $("dial-note").textContent =
     "The facts on the left are the same at every setting. This changes how they are put to you, not what they are.";
+
+  renderRoleMap();
 }
+
+$("rolemap-go").onclick = async () => {
+  $("rolemap-go").disabled = true;
+  $("rolemap-status").textContent = "Reading the roles from the replaced version…";
+  try { await api("rolemap", {}); $("rolemap-status").textContent = ""; }
+  catch (_) { $("rolemap-status").textContent = ""; }
+  finally { $("rolemap-go").disabled = false; render(); }
+};
 
 /* ---------- the dial, with its one friction point ---------- */
 
