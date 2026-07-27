@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+venv/
+
+# Never commit anything a user opened with this tool, or any config it wrote.
+# The tool itself keeps these outside the repo, but this is a second lock.
+config.json
+consent.json
+activity.log.jsonl
+*.pdf
+*.docx

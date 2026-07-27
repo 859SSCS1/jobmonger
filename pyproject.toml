@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobmonger"
+version = "0.1.0"
+description = "A local-first advocate for the individual employee. Bring your own documents and model; names are redacted before anything leaves your machine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["employment", "local-first", "redaction", "privacy"]
+
+# Dependency policy: every dependency is something a code auditor has to trust,
+# so the core has NONE. The redaction gate, fact layer, advocacy dial, model
+# bridge, log, and local view all run on the standard library alone.
+# Everything below is optional and additive.
+dependencies = []
+
+[project.optional-dependencies]
+# Document formats beyond .txt/.md. Each is imported lazily and fails with a
+# plain instruction rather than an ImportError traceback.
+docs = [
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+]
+# Higher-recall name detection. The built-in detector is dependency-free and
+# always available; this upgrades recall only. Human confirmation is what makes
+# redaction safe either way — see docs/THREAT-MODEL.md.
+ner = [
+    "spacy>=3.7",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+jobmonger = "jobmonger.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["jobmonger*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
