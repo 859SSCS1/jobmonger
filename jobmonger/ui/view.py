@@ -21,8 +21,8 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from .. import config as config_module
-from .. import (consent, constants, dial, facts, friction, intake, log,
-                redaction, rolemap, tenure)
+from .. import (compliance, consent, constants, dial, facts, friction, intake,
+                log, redaction, rolemap, tenure)
 from ..bridge import BridgeError, check_reachable
 from ..intake import IntakeError
 from ..redaction import Review, Role, SealError, UnscreenedName
@@ -50,6 +50,7 @@ class Session:
         self.fact_set: facts.FactSet | None = None
         self.role_map: rolemap.RoleMap | None = None
         self.tenure_map: tenure.TenureMap | None = None
+        self.compliance: compliance.ComplianceReading | None = None
         self.last_error: str = ""
 
     def reset_document(self) -> None:
@@ -59,6 +60,7 @@ class Session:
         self.fact_set = None
         self.role_map = None
         self.tenure_map = None
+        self.compliance = None
 
 
 SESSION = Session()
@@ -213,6 +215,24 @@ def _state() -> dict[str, Any]:
                 "model": session.tenure_map.model,
             }
             if session.tenure_map
+            else None
+        ),
+        "compliance": (
+            {
+                "requirements": [
+                    {"requirement": r.requirement, "applies_to": r.applies_to,
+                     "deadline": r.deadline, "quote": r.quote, "certainty": r.certainty}
+                    for r in session.compliance.requirements
+                ],
+                "silences": [
+                    {"topic": s.topic, "why_it_matters": s.why_it_matters}
+                    for s in session.compliance.silences
+                ],
+                "applies_labels": compliance._APPLIES_LABELS,
+                "asked": session.compliance.asked,
+                "model": session.compliance.model,
+            }
+            if session.compliance
             else None
         ),
         "dial": {
@@ -379,6 +399,17 @@ def _act_tenure(body: dict) -> dict:
     return {"ok": True}
 
 
+def _act_compliance(body: dict) -> dict:
+    session = SESSION
+    if session.sealed is None or session.fact_set is None or session.review is None:
+        raise IntakeError("Review and read a document first.")
+    session.compliance = compliance.read(
+        session.sealed, session.review, session.fact_set.render(),
+        question=str(body.get("question", "")),
+    )
+    return {"ok": True}
+
+
 def _act_friction(body: dict) -> dict:
     if SESSION.fact_set is None:
         raise IntakeError("Nothing to confirm against yet.")
@@ -408,6 +439,7 @@ ACTIONS: dict[str, Callable[[dict], dict]] = {
     "seal": _act_seal,
     "rolemap": _act_rolemap,
     "tenure": _act_tenure,
+    "compliance": _act_compliance,
     "friction": _act_friction,
     "log": _act_log,
 }

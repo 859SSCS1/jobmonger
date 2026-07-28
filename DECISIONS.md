@@ -77,6 +77,12 @@ Numbers are load-bearing; labels are cosmetic and safe to rename.
 ### N4 · The local view's window title and heading
 Currently the repository name. One constant, `jobmonger/ui/view.py::APP_TITLE`.
 
+### N6 · Compliance "applies to" headings
+Keyed internally as `you` / `organisation` / `both` — load-bearing, in the
+model's schema. Display headings are provisional and live in one dict,
+`jobmonger/compliance.py::_APPLIES_LABELS`: currently "You have to", "They have
+to", "Both of you have to".
+
 ### N5 · Role-map direction headings
 The three columns are keyed internally as `to_company` / `for_user` /
 `against_user` — those are load-bearing and appear in the model's schema. Their
@@ -148,7 +154,7 @@ is an interface with two implementations.
 are separate files. Documents are **never** copied into this directory — they
 are read from wherever the user keeps them and held in memory only.
 
-### P10 · Length of service is sent as a band, never a figure — **PROVISIONAL**
+### P10 · Length of service is sent as a band, never a figure — **ratified 2026-07-27**
 
 `[TENURE]` sends "over ten years", not "fourteen years". A band reasons about
 as well and identifies far less: exact service length plus a role plus a small
@@ -160,11 +166,15 @@ Bands in use (`jobmonger/tenure.py::BANDS`), deliberately coarse at the top:
 under a year · one to two years · three to five years · six to ten years · over
 ten years.
 
-**For the owner:** the boundaries are a guess, and the top band is very wide —
-eleven years and twenty-five years read identically. If the distinction matters
-for the kind of situation this is for, the top should split. Also open: whether
-the user's *own* tenure should be banded the same way, or sent exactly, given it
-is their own detail to share.
+**Settled by the owner 2026-07-27:** the user's *own* tenure is banded exactly
+like everyone else's, for posture consistency. This falls out of `PERSON_ROLES`
+including `SELF`, which makes it easy to break by accident later, so there is an
+explicit test rather than an incidental behaviour.
+
+**Still provisional:** the band boundaries themselves. The owner has said these
+will be revisited and do not need solving now. Worth keeping in view when they
+are: the top band is very wide — eleven years and twenty-five years read
+identically.
 
 ### P9 · Decision-friction v1 seed *(scope doc decision #8)*
 The scope doc defers `[DECISION-FRICTION]` but notes the v1 restate-and-confirm
@@ -259,7 +269,7 @@ the surface but not the offsets — caught by a span/surface alignment check).
 Openers are trimmed only from the front of a longer run, never rejected alone,
 so a real name like "May Fletcher" still detects.
 
-### X8 · The bridge takes no text from callers at all — **structural fix for X6**
+### X8 · The bridge takes no text from callers at all — **ratified 2026-07-27**
 
 X6 was fixed at its call site. That fixed the bug and left the next module free
 to repeat it, so the owner asked for the class to be closed rather than the
@@ -286,7 +296,27 @@ module and failing if any call site passes anything but a minted directive.
 user-supplied and points wherever the user says. That is inherent to bring-your-
 own-endpoint and is the user's choice to make, not a leak to close.
 
-### X9 · Screening is stricter than document detection
+### P11 · Compliance surfaces the organisation's obligations too — **PROVISIONAL**
+
+`[COMPLIANCE]` splits requirements three ways: on you, on the organisation, on
+both. Including the middle one is a judgement call, because it is the closest
+this tool comes to the line it must not cross — from *"they have to acknowledge
+an appeal"* to *"and they didn't"* is one short step, and it is the step a
+reader most wants taken.
+
+**In use, with the line held twice.** The instruction forbids saying whether
+anyone met a requirement; and the output *has nowhere to record it* — the schema
+offers `requirement`, `applies_to`, `deadline`, `quote`, `certainty` and nothing
+else, with `additionalProperties: false`. A model inclined to drift has no field
+to drift into. Both halves are tested.
+
+**For the owner:** the alternative is to surface only obligations that bind the
+user, which is the narrowest reading of "stay compliant with their own
+handbook". That would be safer and less useful — knowing what the other side is
+required to do is a large part of understanding your own position, and a reader
+who does not know an acknowledgment was due cannot ask for one.
+
+### X9 · Screening is stricter than document detection — **ratified 2026-07-27**
 
 Found by a tenure test: `"Devika said so."` escaped screening, because the
 detector exempts a capitalised word opening a sentence. That exemption is right

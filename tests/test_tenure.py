@@ -103,6 +103,27 @@ def test_the_exact_figure_is_never_logged(prepared, stub):
     assert LONGEST_BAND in written
 
 
+def test_your_own_tenure_is_banded_like_everyone_elses(document, granted, stub):
+    """Owner-settled: [SELF] gets the same treatment, for posture consistency.
+
+    Falls out of PERSON_ROLES including SELF, which makes it easy to break by
+    accident later — hence an explicit test rather than leaving it incidental.
+    """
+    review = Review(document, detect(document))
+    for index, candidate in enumerate(review.detections):
+        if candidate.surface == "Marcus Okafor":
+            review.confirm_all_matching(index, Role.SELF)
+    review.absorb_partials()
+    for index in list(review.pending()):
+        review.reject(index)
+    sealed = seal(document, review)
+
+    tenure.observe(sealed, review, FACTS_TEXT, [TenureInput("[SELF]", years=14)])
+    body = stub["payload"].text
+    assert "14" not in body, "your own service length is banded too"
+    assert LONGEST_BAND in body
+
+
 # -- the four routing constraints ------------------------------------------
 
 

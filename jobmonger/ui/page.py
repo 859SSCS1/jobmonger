@@ -364,6 +364,20 @@ PAGE = r"""<!doctype html>
           </div>
           <div class="disclaimer" id="tenure-disclaimer"></div>
         </section>
+        <section class="card" style="margin-top:14px">
+          <div class="small muted" style="margin-bottom:2px">What your document requires</div>
+          <div class="small muted" style="margin-bottom:12px">What the rules say you have to do, by when — and where they say nothing.</div>
+          <div class="field">
+            <label for="c-question">Ask about a specific rule <span class="muted">(optional)</span></label>
+            <input id="c-question" placeholder="e.g. how long do I have to appeal?">
+          </div>
+          <div id="compliance-body"></div>
+          <div class="actions">
+            <button id="compliance-go">Read the rules</button>
+            <span id="compliance-status" class="small muted"></span>
+          </div>
+          <div class="disclaimer" id="compliance-disclaimer"></div>
+        </section>
         <div class="actions"><button class="ghost small" id="read-restart">Open a different document</button></div>
       </div>
     </div>
@@ -606,6 +620,33 @@ function renderTenure() {
   if (t) $("tenure-disclaimer").textContent = STATE.short_disclaimer;
 }
 
+function renderCompliance() {
+  const c = STATE.compliance;
+  const box = $("compliance-body");
+  if (!c) { box.innerHTML = ""; return; }
+  const deadlines = c.requirements.filter((r) => r.deadline);
+  box.innerHTML =
+    (deadlines.length
+      ? `<div class="notice warn" style="margin-top:10px"><strong>Time limits</strong>`
+        + deadlines.map((r) => `<div class="small" style="margin-top:5px">${esc(r.requirement)} — <strong>${esc(r.deadline)}</strong></div>`).join("")
+        + `</div>` : "")
+    + Object.entries(c.applies_labels).map(([key, heading]) => {
+        const group = c.requirements.filter((r) => r.applies_to === key);
+        if (!group.length) return "";
+        return `<div class="duty-group"><div class="heading">${esc(heading)}</div>`
+          + group.map((r) => `<div class="duty">${esc(r.requirement)}${
+              r.certainty !== "stated" ? `<span class="tag">${esc(r.certainty)}</span>` : ""
+            }${r.deadline ? `<div class="small muted">time limit: ${esc(r.deadline)}</div>` : ""
+            }<div class="quote">${esc(r.quote)}</div></div>`).join("")
+          + `</div>`;
+      }).join("")
+    + (c.silences.length
+      ? `<div class="duty-group"><div class="heading">What it does not say</div>`
+        + c.silences.map((s) => `<div class="duty">${esc(s.topic)}<div class="quote">${esc(s.why_it_matters)}</div></div>`).join("")
+        + `</div>` : "");
+  $("compliance-disclaimer").textContent = STATE.short_disclaimer;
+}
+
 function renderRead() {
   const sealed = STATE.sealed, f = STATE.facts;
   $("sealed-summary").textContent =
@@ -635,7 +676,16 @@ function renderRead() {
 
   renderRoleMap();
   renderTenure();
+  renderCompliance();
 }
+
+$("compliance-go").onclick = async () => {
+  $("compliance-go").disabled = true;
+  $("compliance-status").textContent = "Reading what your document requires…";
+  try { await api("compliance", { question: $("c-question").value }); $("compliance-status").textContent = ""; }
+  catch (_) { $("compliance-status").textContent = ""; }
+  finally { $("compliance-go").disabled = false; render(); }
+};
 
 $("tenure-go").onclick = async () => {
   const inputs = [...document.querySelectorAll(".t-years")].map((el) => ({

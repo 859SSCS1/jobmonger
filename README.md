@@ -92,9 +92,10 @@ when this breaks for you, nobody upstream finds out.
 
 ## Where things stand
 
-The critical path is built: scaffold, consent gate, config and key handling,
+Every Stage 1 module is built: scaffold, consent gate, config and key handling,
 document intake, the redaction gate, the model bridge, the fact layer, the
-advocacy dial, the local log, and the local view.
+advocacy dial, the local log, the local view, and the three additive analyses —
+role map, tenure, and compliance.
 
 Also built: the role map — what each role around you is obliged to do, split
 into duties owed to the organisation, owed to you, and working against you, with
@@ -104,7 +105,12 @@ And tenure: what length of service tends to confer on a position — knowing
 which rules get enforced, who to ask, being believed by default. Sent as a band
 rather than an exact figure, and marked as inference throughout.
 
-Not yet built: the handbook compliance companion.
+And the compliance companion: what your own handbook requires of you, by when,
+and — just as importantly — where it says nothing at all. It restates your rules
+and surfaces time limits. It does not tell you whether anyone has kept them.
+
+All three additive modules route through the same sealed chokepoint as the
+critical path. None of them opens a second way to reach a model.
 
 Every naming and policy question raised while building is collected in
 [DECISIONS.md](DECISIONS.md) rather than settled quietly in the code.

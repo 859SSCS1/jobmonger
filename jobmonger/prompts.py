@@ -38,6 +38,7 @@ class Task(str, Enum):
     DIAL_READING = "dial_reading"
     ROLE_MAP = "role_map"
     TENURE = "tenure"
+    COMPLIANCE = "compliance"
     CONNECTIVITY_PROBE = "connectivity_probe"
 
 
@@ -314,6 +315,96 @@ TENURE_SCHEMA = {
 
 
 # --------------------------------------------------------------------------
+# [COMPLIANCE]
+# --------------------------------------------------------------------------
+
+COMPLIANCE = """
+Below are the facts established from a document — the reader's own handbook,
+policy, or agreement — and, if they asked something specific, their question.
+
+Set out what the document *requires*, and where it is *silent*. The reader is
+trying to understand and keep to their own rules. That is the whole job.
+
+For each requirement give:
+  - `requirement`: what the document requires, in one plain sentence.
+  - `applies_to`: "you" if it is an obligation on the reader, "organisation" if
+    it is an obligation on their employer, "both" if it runs both ways.
+  - `deadline`: any time limit attached to it, quoted or paraphrased tightly —
+    "within ten working days of the decision". Empty string if there is none.
+    Timing is often the most actionable thing a handbook contains, so do not
+    bury it inside the requirement text.
+  - `quote`: the shortest exact span from the material that supports it, copied
+    verbatim. If you cannot quote it, do not include the requirement.
+  - `certainty`: "stated" if the document says it outright, "implied" if it
+    follows from what is said, "unclear" if it is gestured at but unsettled.
+
+For each silence give:
+  - `topic`: what the document does not address.
+  - `why_it_matters`: one sentence on why a reader in this situation would have
+    expected it to. Silences are not filler here — a rule that does not exist is
+    something the reader needs to know does not exist.
+
+Hold this line, and hold it firmly. It is the easiest one in this tool to cross:
+
+  - Say what the document requires. Never say whether anyone has met it. Not the
+    reader, not their employer, not anyone.
+  - Do not state or imply that a requirement was breached, missed, satisfied, or
+    complied with. "The policy requires notice within five days" is your job.
+    "You gave notice late" and "they failed to respond in time" are not, even if
+    the material appears to show it.
+  - Do not assess the reader's legal position, characterise anything as a claim,
+    a grievance, a defence, or a violation, or predict how any dispute would go.
+  - Do not advise on strategy. Explaining what a rule says is not the same as
+    telling someone what to do about it, and only the first is yours.
+  - Where the document is silent, say so plainly. Do not fill the gap with what
+    such documents usually say, what the law generally requires, or what would
+    be reasonable. A confident guess about a rule that does not exist is the
+    most damaging thing you could produce here.
+"""
+
+COMPLIANCE_NOTE = (
+    "You are helping one person understand their own handbook. You explain what "
+    "it requires and where it says nothing. You do not judge whether anyone has "
+    "followed it."
+)
+
+COMPLIANCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "requirements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "requirement": {"type": "string"},
+                    "applies_to": {"type": "string", "enum": ["you", "organisation", "both"]},
+                    "deadline": {"type": "string"},
+                    "quote": {"type": "string"},
+                    "certainty": {"type": "string", "enum": ["stated", "implied", "unclear"]},
+                },
+                "required": ["requirement", "applies_to", "deadline", "quote", "certainty"],
+                "additionalProperties": False,
+            },
+        },
+        "silences": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "why_it_matters": {"type": "string"},
+                },
+                "required": ["topic", "why_it_matters"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["requirements", "silences"],
+    "additionalProperties": False,
+}
+
+
+# --------------------------------------------------------------------------
 # Connectivity probe
 # --------------------------------------------------------------------------
 
@@ -328,6 +419,7 @@ _INSTRUCTIONS: dict[Task, str] = {
     Task.FACT_EXTRACTION: FACT_EXTRACTION,
     Task.ROLE_MAP: ROLE_MAP,
     Task.TENURE: TENURE,
+    Task.COMPLIANCE: COMPLIANCE,
     Task.CONNECTIVITY_PROBE: CONNECTIVITY_PROBE,
 }
 
@@ -336,6 +428,7 @@ _NOTES: dict[Task, str] = {
     Task.DIAL_READING: DIAL_NOTE,
     Task.ROLE_MAP: ROLE_MAP_NOTE,
     Task.TENURE: TENURE_NOTE,
+    Task.COMPLIANCE: COMPLIANCE_NOTE,
     Task.CONNECTIVITY_PROBE: "",
 }
 
@@ -344,6 +437,7 @@ _SCHEMAS: dict[Task, dict | None] = {
     Task.DIAL_READING: None,
     Task.ROLE_MAP: ROLE_MAP_SCHEMA,
     Task.TENURE: TENURE_SCHEMA,
+    Task.COMPLIANCE: COMPLIANCE_SCHEMA,
     Task.CONNECTIVITY_PROBE: None,
 }
 
